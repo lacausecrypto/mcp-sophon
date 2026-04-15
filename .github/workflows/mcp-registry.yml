@@ -26,8 +26,14 @@ jobs:
 
       - name: Install MCP publisher CLI
         run: |
-          curl -fsSL https://raw.githubusercontent.com/modelcontextprotocol/registry/main/scripts/install-publisher.sh | bash
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          # Download the prebuilt binary from the registry's GitHub releases.
+          # Pinned to a known-good tag; bump when a new publisher releases.
+          PUB_VERSION="v1.6.0"
+          curl -fsSL \
+            "https://github.com/modelcontextprotocol/registry/releases/download/${PUB_VERSION}/mcp-publisher_linux_amd64.tar.gz" \
+            | tar xz -C /usr/local/bin mcp-publisher
+          chmod +x /usr/local/bin/mcp-publisher
+          mcp-publisher --help | head -3
 
       - name: Authenticate via GitHub OIDC
         run: mcp-publisher login github-oidc
