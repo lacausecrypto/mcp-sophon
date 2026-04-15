@@ -37,7 +37,10 @@ pub struct CompressionResult {
 }
 
 pub const DEFAULT_TOPIC_MAPPINGS: &[(&str, &[&str])] = &[
-    ("coding", &["code_formatting", "programming_*", "technical_*"]),
+    (
+        "coding",
+        &["code_formatting", "programming_*", "technical_*"],
+    ),
     ("python", &["code_formatting", "python_*", "programming_*"]),
     ("javascript", &["code_formatting", "javascript_*", "web_*"]),
     ("math", &["math_*", "formatting_numbers", "latex_*"]),
@@ -56,7 +59,10 @@ fn default_topic_mappings() -> HashMap<String, Vec<String>> {
         .map(|(topic, patterns)| {
             (
                 (*topic).to_string(),
-                patterns.iter().map(|p| (*p).to_string()).collect::<Vec<_>>(),
+                patterns
+                    .iter()
+                    .map(|p| (*p).to_string())
+                    .collect::<Vec<_>>(),
             )
         })
         .collect()
@@ -219,7 +225,10 @@ fn resolve_dependencies(parsed: &ParsedPrompt, included: &mut HashSet<String>) {
     }
 }
 
-fn select_sections_in_order<'a>(parsed: &'a ParsedPrompt, included: &HashSet<String>) -> Vec<&'a PromptSection> {
+fn select_sections_in_order<'a>(
+    parsed: &'a ParsedPrompt,
+    included: &HashSet<String>,
+) -> Vec<&'a PromptSection> {
     parsed
         .sections
         .iter()
@@ -236,7 +245,11 @@ fn trim_to_budget(
         return;
     }
 
-    selected.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.token_count.cmp(&b.token_count)));
+    selected.sort_by(|a, b| {
+        a.priority
+            .cmp(&b.priority)
+            .then(a.token_count.cmp(&b.token_count))
+    });
 
     // First pass: drop non-topic-matched sections with priority > 0 (largest first).
     // These are the "generic" sections that have nothing to do with the query.
@@ -247,7 +260,9 @@ fn trim_to_budget(
             .rfind(|(_, s)| s.priority > 0 && !topic_matched.contains(&s.id))
             .map(|(idx, _)| idx);
         match idx {
-            Some(i) => { selected.remove(i); }
+            Some(i) => {
+                selected.remove(i);
+            }
             None => break,
         }
     }
@@ -262,7 +277,9 @@ fn trim_to_budget(
             .rfind(|(_, s)| s.priority > 0)
             .map(|(idx, _)| idx);
         match idx {
-            Some(i) => { selected.remove(i); }
+            Some(i) => {
+                selected.remove(i);
+            }
             None => break,
         }
     }
@@ -270,8 +287,15 @@ fn trim_to_budget(
     selected.sort_by(|a, b| a.id.cmp(&b.id));
 }
 
-fn backfill_to_minimum<'a>(parsed: &'a ParsedPrompt, selected: &mut Vec<&'a PromptSection>, min_tokens: usize) {
-    let mut picked = selected.iter().map(|s| s.id.as_str()).collect::<HashSet<_>>();
+fn backfill_to_minimum<'a>(
+    parsed: &'a ParsedPrompt,
+    selected: &mut Vec<&'a PromptSection>,
+    min_tokens: usize,
+) {
+    let mut picked = selected
+        .iter()
+        .map(|s| s.id.as_str())
+        .collect::<HashSet<_>>();
     let candidates = parsed
         .sections
         .iter()
@@ -289,7 +313,11 @@ fn backfill_to_minimum<'a>(parsed: &'a ParsedPrompt, selected: &mut Vec<&'a Prom
     selected.sort_by(|a, b| a.id.cmp(&b.id));
 }
 
-fn keep_top_n_non_core<'a>(parsed: &'a ParsedPrompt, selected: &mut Vec<&'a PromptSection>, n: usize) {
+fn keep_top_n_non_core<'a>(
+    parsed: &'a ParsedPrompt,
+    selected: &mut Vec<&'a PromptSection>,
+    n: usize,
+) {
     let core_ids = parsed
         .core_sections
         .iter()
@@ -301,9 +329,17 @@ fn keep_top_n_non_core<'a>(parsed: &'a ParsedPrompt, selected: &mut Vec<&'a Prom
         .filter(|s| !core_ids.contains(s.id.as_str()))
         .cloned()
         .collect::<Vec<_>>();
-    non_core.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.token_count.cmp(&b.token_count)));
+    non_core.sort_by(|a, b| {
+        a.priority
+            .cmp(&b.priority)
+            .then(a.token_count.cmp(&b.token_count))
+    });
 
-    let keep_non_core = non_core.into_iter().take(n).map(|s| s.id.clone()).collect::<HashSet<_>>();
+    let keep_non_core = non_core
+        .into_iter()
+        .take(n)
+        .map(|s| s.id.clone())
+        .collect::<HashSet<_>>();
 
     selected.retain(|s| core_ids.contains(s.id.as_str()) || keep_non_core.contains(&s.id));
 }

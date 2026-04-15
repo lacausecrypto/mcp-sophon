@@ -97,16 +97,11 @@ pub fn search_index(index: &SemanticIndex, query: &str, top_k: usize) -> Vec<Str
 
     // NaN scores are sunk to the bottom so they can never outrank real matches.
     // (Previously `unwrap_or(Ordering::Equal)` silently accepted NaN.)
-    scored.sort_by(|a, b| {
-        match (a.1.is_nan(), b.1.is_nan()) {
-            (true, true) => std::cmp::Ordering::Equal,
-            (true, false) => std::cmp::Ordering::Greater,
-            (false, true) => std::cmp::Ordering::Less,
-            (false, false) => b
-                .1
-                .partial_cmp(&a.1)
-                .expect("non-NaN f32 compare"),
-        }
+    scored.sort_by(|a, b| match (a.1.is_nan(), b.1.is_nan()) {
+        (true, true) => std::cmp::Ordering::Equal,
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        (false, false) => b.1.partial_cmp(&a.1).expect("non-NaN f32 compare"),
     });
 
     scored
@@ -177,7 +172,9 @@ fn embed_text(text: &str) -> Vec<f32> {
     {
         let mut hash = 0u64;
         for b in token.as_bytes() {
-            hash = hash.wrapping_mul(1099511628211).wrapping_add(*b as u64 + 1469598103934665603);
+            hash = hash
+                .wrapping_mul(1099511628211)
+                .wrapping_add(*b as u64 + 1469598103934665603);
         }
         let idx = (hash as usize) % DIM;
         vec[idx] += 1.0;

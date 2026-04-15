@@ -38,7 +38,14 @@ static TOPIC_KEYWORDS: Lazy<HashMap<&'static str, Vec<&'static str>>> = Lazy::ne
         ),
         (
             "math",
-            vec!["math", "equation", "formula", "proof", "calculate", "integral"],
+            vec![
+                "math",
+                "equation",
+                "formula",
+                "proof",
+                "calculate",
+                "integral",
+            ],
         ),
         (
             "creative_writing",
@@ -46,7 +53,14 @@ static TOPIC_KEYWORDS: Lazy<HashMap<&'static str, Vec<&'static str>>> = Lazy::ne
         ),
         (
             "data_analysis",
-            vec!["dataset", "csv", "table", "statistics", "analyze", "analysis"],
+            vec![
+                "dataset",
+                "csv",
+                "table",
+                "statistics",
+                "analyze",
+                "analysis",
+            ],
         ),
         (
             "conversation",
@@ -103,7 +117,10 @@ pub fn analyze_query(query: &str, history: Option<&[ConversationMessage]>) -> Qu
         0.3
     } else {
         let top_score = scored_topics[0].1 as f32;
-        let total_score = scored_topics.iter().map(|(_, score)| *score as f32).sum::<f32>();
+        let total_score = scored_topics
+            .iter()
+            .map(|(_, score)| *score as f32)
+            .sum::<f32>();
         (top_score / total_score).clamp(0.0, 1.0)
     };
 

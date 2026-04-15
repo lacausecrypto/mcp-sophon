@@ -13,28 +13,26 @@ pub fn git_status_filter() -> FilterConfig {
     FilterConfig {
         name: "git_status",
         command_patterns: vec![rx(r"^\s*git\s+status")],
-        strategies: vec![
-            CompressionStrategy::FilterLines {
-                remove_patterns: vec![
-                    rx(r#"^\s*\(use "git"#),
-                    rx(r"^On branch"),
-                    rx(r"^Your branch is"),
-                    rx(r"^Changes not staged"),
-                    rx(r"^Changes to be committed"),
-                    rx(r"^Untracked files:"),
-                    rx(r"^no changes added to commit"),
-                    rx(r"^nothing to commit"),
-                    rx(r"^\s*$"),
-                ],
-                // Narrow keep list: only "modified: / new file: / …" and
-                // bare filenames under an untracked block. We deliberately
-                // do NOT keep arbitrary alphanumeric-starting lines because
-                // those include "no changes added to commit (use …)".
-                keep_patterns: vec![
-                    rx(r"^\s*(modified|deleted|new file|renamed|typechange|both modified):"),
-                ],
-            },
-        ],
+        strategies: vec![CompressionStrategy::FilterLines {
+            remove_patterns: vec![
+                rx(r#"^\s*\(use "git"#),
+                rx(r"^On branch"),
+                rx(r"^Your branch is"),
+                rx(r"^Changes not staged"),
+                rx(r"^Changes to be committed"),
+                rx(r"^Untracked files:"),
+                rx(r"^no changes added to commit"),
+                rx(r"^nothing to commit"),
+                rx(r"^\s*$"),
+            ],
+            // Narrow keep list: only "modified: / new file: / …" and
+            // bare filenames under an untracked block. We deliberately
+            // do NOT keep arbitrary alphanumeric-starting lines because
+            // those include "no changes added to commit (use …)".
+            keep_patterns: vec![rx(
+                r"^\s*(modified|deleted|new file|renamed|typechange|both modified):",
+            )],
+        }],
         max_output_tokens: Some(400),
         preserve_head: 0,
         preserve_tail: 0,
@@ -75,27 +73,25 @@ pub fn git_push_pull_filter() -> FilterConfig {
     FilterConfig {
         name: "git_push_pull",
         command_patterns: vec![rx(r"^\s*git\s+(push|pull|fetch)\b")],
-        strategies: vec![
-            CompressionStrategy::FilterLines {
-                remove_patterns: vec![
-                    rx(r"^(Enumerating|Counting|Compressing|Writing|Delta|Total)"),
-                    rx(r"^remote:"),
-                    rx(r"^Unpacking"),
-                    rx(r"^Resolving"),
-                    rx(r"^\s*$"),
-                ],
-                keep_patterns: vec![
-                    rx(r"^\s*[a-f0-9]+\.\.[a-f0-9]+"),
-                    rx(r"->"),
-                    rx(r"Fast-forward"),
-                    rx(r"Already up to date"),
-                    rx(r"error:"),
-                    rx(r"fatal:"),
-                    rx(r"Everything up-to-date"),
-                    rx(r"To "),
-                ],
-            },
-        ],
+        strategies: vec![CompressionStrategy::FilterLines {
+            remove_patterns: vec![
+                rx(r"^(Enumerating|Counting|Compressing|Writing|Delta|Total)"),
+                rx(r"^remote:"),
+                rx(r"^Unpacking"),
+                rx(r"^Resolving"),
+                rx(r"^\s*$"),
+            ],
+            keep_patterns: vec![
+                rx(r"^\s*[a-f0-9]+\.\.[a-f0-9]+"),
+                rx(r"->"),
+                rx(r"Fast-forward"),
+                rx(r"Already up to date"),
+                rx(r"error:"),
+                rx(r"fatal:"),
+                rx(r"Everything up-to-date"),
+                rx(r"To "),
+            ],
+        }],
         max_output_tokens: Some(100),
         preserve_head: 0,
         preserve_tail: 3,
@@ -110,10 +106,7 @@ pub fn git_diff_filter() -> FilterConfig {
         strategies: vec![
             CompressionStrategy::FilterLines {
                 remove_patterns: vec![rx(r"^index [0-9a-f]+\.\.[0-9a-f]+")],
-                keep_patterns: vec![
-                    rx(r"^(diff|---|\+\+\+|@@)"),
-                    rx(r"^[+-][^+-]"),
-                ],
+                keep_patterns: vec![rx(r"^(diff|---|\+\+\+|@@)"), rx(r"^[+-][^+-]")],
             },
             CompressionStrategy::Truncate {
                 max_lines: 120,
@@ -150,7 +143,11 @@ no changes added to commit (use "git add" and/or "git commit -a")"#;
 
         let f = git_status_filter();
         let r = run_pipeline("git status", input, &f);
-        assert!(r.compressed.contains("modified:"), "lost modified: {}", r.compressed);
+        assert!(
+            r.compressed.contains("modified:"),
+            "lost modified: {}",
+            r.compressed
+        );
         assert!(r.compressed.contains("src/main.rs"));
         assert!(!r.compressed.contains("use \"git add"));
         assert!(!r.compressed.contains("On branch main"));

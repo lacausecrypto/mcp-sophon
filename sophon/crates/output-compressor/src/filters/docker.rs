@@ -17,11 +17,13 @@ pub fn docker_ps_filter() -> FilterConfig {
             rx(r"^\s*docker\s+(ps|container\s+ls)"),
             rx(r"^\s*podman\s+(ps|container\s+ls)"),
         ],
-        strategies: vec![
-            CompressionStrategy::ExtractColumns {
-                fields: vec!["NAMES".to_string(), "STATUS".to_string(), "PORTS".to_string()],
-            },
-        ],
+        strategies: vec![CompressionStrategy::ExtractColumns {
+            fields: vec![
+                "NAMES".to_string(),
+                "STATUS".to_string(),
+                "PORTS".to_string(),
+            ],
+        }],
         max_output_tokens: Some(300),
         preserve_head: 1,
         preserve_tail: 0,

@@ -26,8 +26,12 @@ mod tests {
         let ext = new();
         let src = "<?php\nclass User {\n  public function login() { return true; }\n}\n";
         let syms = ext.extract(src);
-        assert!(syms.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Class));
-        assert!(syms.iter().any(|s| s.name == "login" && s.kind == SymbolKind::Method));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "User" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "login" && s.kind == SymbolKind::Method));
     }
 
     #[test]
@@ -35,9 +39,15 @@ mod tests {
         let ext = new();
         let src = "<?php\ninterface I {}\ntrait T {}\nenum Color { case Red; case Green; }\n";
         let syms = ext.extract(src);
-        assert!(syms.iter().any(|s| s.name == "I" && s.kind == SymbolKind::Interface));
-        assert!(syms.iter().any(|s| s.name == "T" && s.kind == SymbolKind::Interface));
-        assert!(syms.iter().any(|s| s.name == "Color" && s.kind == SymbolKind::Enum));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "I" && s.kind == SymbolKind::Interface));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "T" && s.kind == SymbolKind::Interface));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Color" && s.kind == SymbolKind::Enum));
     }
 
     #[test]
@@ -46,7 +56,9 @@ mod tests {
         let src = "<?php\nnamespace App\\Http;\nfunction handle() { return 1; }\n";
         let syms = ext.extract(src);
         assert!(syms.iter().any(|s| s.kind == SymbolKind::Module));
-        assert!(syms.iter().any(|s| s.name == "handle" && s.kind == SymbolKind::Function));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "handle" && s.kind == SymbolKind::Function));
     }
 
     #[test]

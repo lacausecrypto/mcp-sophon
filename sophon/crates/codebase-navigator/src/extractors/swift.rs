@@ -41,8 +41,9 @@ static SW_FUNC_RE: Lazy<Regex> = Lazy::new(|| {
 });
 
 /// `typealias Name = ...`
-static SW_TYPEALIAS_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^\s*(?:public\s+)?typealias\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=").unwrap());
+static SW_TYPEALIAS_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^\s*(?:public\s+)?typealias\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=").unwrap()
+});
 
 /// Top-level `let` / `var` with a capitalized name (heuristic for
 /// module-level constants). Lowercased ones are usually local.
@@ -103,7 +104,12 @@ impl SymbolExtractor for SwiftExtractor {
             }
 
             if let Some(caps) = SW_TYPEALIAS_RE.captures(line) {
-                out.push(Symbol::new(&caps["name"], SymbolKind::TypeAlias, line_no, trimmed));
+                out.push(Symbol::new(
+                    &caps["name"],
+                    SymbolKind::TypeAlias,
+                    line_no,
+                    trimmed,
+                ));
                 continue;
             }
 
@@ -120,7 +126,12 @@ impl SymbolExtractor for SwiftExtractor {
 
             if indent_len == 0 {
                 if let Some(caps) = SW_CONST_RE.captures(line) {
-                    out.push(Symbol::new(&caps["name"], SymbolKind::Const, line_no, trimmed));
+                    out.push(Symbol::new(
+                        &caps["name"],
+                        SymbolKind::Const,
+                        line_no,
+                        trimmed,
+                    ));
                 }
             }
         }
@@ -140,28 +151,48 @@ mod tests {
     fn captures_class_struct_enum_protocol_actor() {
         let src = "import Foundation\n\npublic class Widget {}\nstruct Point { var x: Int }\nenum Color { case red }\nprotocol Greeter { func hello() }\nactor Counter {}\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "Widget" && s.kind == SymbolKind::Class));
-        assert!(syms.iter().any(|s| s.name == "Point" && s.kind == SymbolKind::Struct));
-        assert!(syms.iter().any(|s| s.name == "Color" && s.kind == SymbolKind::Enum));
-        assert!(syms.iter().any(|s| s.name == "Greeter" && s.kind == SymbolKind::Interface));
-        assert!(syms.iter().any(|s| s.name == "Counter" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Widget" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Point" && s.kind == SymbolKind::Struct));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Color" && s.kind == SymbolKind::Enum));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Greeter" && s.kind == SymbolKind::Interface));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Counter" && s.kind == SymbolKind::Class));
     }
 
     #[test]
     fn captures_top_level_func_and_method() {
         let src = "func greet(_ name: String) {}\n\npublic class Widget {\n    func render() {}\n    static func make() -> Widget { Widget() }\n}\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "greet" && s.kind == SymbolKind::Function));
-        assert!(syms.iter().any(|s| s.name == "render" && s.kind == SymbolKind::Method));
-        assert!(syms.iter().any(|s| s.name == "make" && s.kind == SymbolKind::Method));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "greet" && s.kind == SymbolKind::Function));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "render" && s.kind == SymbolKind::Method));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "make" && s.kind == SymbolKind::Method));
     }
 
     #[test]
     fn captures_typealias_and_top_let() {
         let src = "public typealias Callback = (String) -> Void\nlet MaxRetries = 5\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "Callback" && s.kind == SymbolKind::TypeAlias));
-        assert!(syms.iter().any(|s| s.name == "MaxRetries" && s.kind == SymbolKind::Const));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Callback" && s.kind == SymbolKind::TypeAlias));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "MaxRetries" && s.kind == SymbolKind::Const));
     }
 
     #[test]
@@ -176,7 +207,11 @@ mod tests {
     fn captures_extension_as_class() {
         let src = "extension String {\n    func shout() -> String { self.uppercased() }\n}\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "String" && s.kind == SymbolKind::Class));
-        assert!(syms.iter().any(|s| s.name == "shout" && s.kind == SymbolKind::Method));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "String" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "shout" && s.kind == SymbolKind::Method));
     }
 }

@@ -43,8 +43,10 @@ static KT_FUN_RE: Lazy<Regex> = Lazy::new(|| {
 
 /// `typealias Name = ...`
 static KT_TYPEALIAS_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^\s*(?:public|private|internal)?\s*typealias\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=")
-        .unwrap()
+    Regex::new(
+        r"^\s*(?:public|private|internal)?\s*typealias\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=",
+    )
+    .unwrap()
 });
 
 /// Top-level `val`/`var` with screaming-snake or PascalCase name.
@@ -111,7 +113,12 @@ impl SymbolExtractor for KotlinExtractor {
             }
 
             if let Some(caps) = KT_TYPEALIAS_RE.captures(line) {
-                out.push(Symbol::new(&caps["name"], SymbolKind::TypeAlias, line_no, trimmed));
+                out.push(Symbol::new(
+                    &caps["name"],
+                    SymbolKind::TypeAlias,
+                    line_no,
+                    trimmed,
+                ));
                 continue;
             }
 
@@ -129,7 +136,12 @@ impl SymbolExtractor for KotlinExtractor {
             // Only catch TOP-LEVEL constants (indent 0).
             if indent_len == 0 {
                 if let Some(caps) = KT_CONST_RE.captures(line) {
-                    out.push(Symbol::new(&caps["name"], SymbolKind::Const, line_no, trimmed));
+                    out.push(Symbol::new(
+                        &caps["name"],
+                        SymbolKind::Const,
+                        line_no,
+                        trimmed,
+                    ));
                 }
             }
         }
@@ -149,34 +161,55 @@ mod tests {
     fn captures_classes_objects_interfaces() {
         let src = "data class User(val name: String)\nobject Singleton\ninterface Repo\nsealed class Result\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Class));
-        assert!(syms.iter().any(|s| s.name == "Singleton" && s.kind == SymbolKind::Class));
-        assert!(syms.iter().any(|s| s.name == "Repo" && s.kind == SymbolKind::Interface));
-        assert!(syms.iter().any(|s| s.name == "Result" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "User" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Singleton" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Repo" && s.kind == SymbolKind::Interface));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Result" && s.kind == SymbolKind::Class));
     }
 
     #[test]
     fn captures_top_level_and_suspend_fun() {
         let src = "fun greet(name: String) {}\nsuspend fun fetch(): String = \"\"\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "greet" && s.kind == SymbolKind::Function));
-        assert!(syms.iter().any(|s| s.name == "fetch" && s.kind == SymbolKind::Function));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "greet" && s.kind == SymbolKind::Function));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "fetch" && s.kind == SymbolKind::Function));
     }
 
     #[test]
     fn captures_methods_inside_class() {
-        let src = "class Service {\n    fun start() {}\n    suspend fun handle(req: Request) = Unit\n}\n";
+        let src =
+            "class Service {\n    fun start() {}\n    suspend fun handle(req: Request) = Unit\n}\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "start" && s.kind == SymbolKind::Method));
-        assert!(syms.iter().any(|s| s.name == "handle" && s.kind == SymbolKind::Method));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "start" && s.kind == SymbolKind::Method));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "handle" && s.kind == SymbolKind::Method));
     }
 
     #[test]
     fn captures_typealias_and_top_const() {
         let src = "typealias Callback = (String) -> Unit\nconst val MAX_RETRIES = 5\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "Callback" && s.kind == SymbolKind::TypeAlias));
-        assert!(syms.iter().any(|s| s.name == "MAX_RETRIES" && s.kind == SymbolKind::Const));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Callback" && s.kind == SymbolKind::TypeAlias));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "MAX_RETRIES" && s.kind == SymbolKind::Const));
     }
 
     #[test]

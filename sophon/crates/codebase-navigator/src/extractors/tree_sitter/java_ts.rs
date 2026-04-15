@@ -33,19 +33,32 @@ public enum Color { RED, GREEN }
 public record Point(int x, int y) {}
 ";
         let syms = ext.extract(src);
-        assert!(syms.iter().any(|s| s.name == "Foo" && s.kind == SymbolKind::Class));
-        assert!(syms.iter().any(|s| s.name == "Repo" && s.kind == SymbolKind::Interface));
-        assert!(syms.iter().any(|s| s.name == "Color" && s.kind == SymbolKind::Enum));
-        assert!(syms.iter().any(|s| s.name == "Point" && s.kind == SymbolKind::Struct));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Foo" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Repo" && s.kind == SymbolKind::Interface));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Color" && s.kind == SymbolKind::Enum));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Point" && s.kind == SymbolKind::Struct));
     }
 
     #[test]
     fn captures_method_inside_class() {
         let ext = new();
-        let src = "public class Svc { public void start() {} private int count(int a) { return a; } }";
+        let src =
+            "public class Svc { public void start() {} private int count(int a) { return a; } }";
         let syms = ext.extract(src);
-        assert!(syms.iter().any(|s| s.name == "start" && s.kind == SymbolKind::Method));
-        assert!(syms.iter().any(|s| s.name == "count" && s.kind == SymbolKind::Method));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "start" && s.kind == SymbolKind::Method));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "count" && s.kind == SymbolKind::Method));
     }
 
     #[test]

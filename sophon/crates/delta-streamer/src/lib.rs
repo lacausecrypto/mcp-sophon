@@ -8,7 +8,11 @@ use std::{fs, io::Write, path::Path};
 
 use differ::generate_diff;
 use protocol::{FileChanges, FileReadResponse, FileWriteRequest};
-use sophon_core::{error::SophonError, hashing::{hash_content, hash_lines}, tokens::count_tokens};
+use sophon_core::{
+    error::SophonError,
+    hashing::{hash_content, hash_lines},
+    tokens::count_tokens,
+};
 use state::{FileState, StateStore};
 
 /// Delta streamer engine that serves delta-aware file read/write operations.
@@ -60,7 +64,9 @@ impl DeltaStreamer {
 
         if let Some(existing) = self.state.get(&path_buf).cloned() {
             if known_hash.map(|h| h == existing.hash).unwrap_or(false)
-                || known_version.map(|v| v == existing.version).unwrap_or(false)
+                || known_version
+                    .map(|v| v == existing.version)
+                    .unwrap_or(false)
             {
                 if existing.hash == hash {
                     self.state.touch(&path_buf);
@@ -137,7 +143,10 @@ impl DeltaStreamer {
         })
     }
 
-    pub fn write_file_delta(&mut self, request: FileWriteRequest) -> Result<FileReadResponse, SophonError> {
+    pub fn write_file_delta(
+        &mut self,
+        request: FileWriteRequest,
+    ) -> Result<FileReadResponse, SophonError> {
         use patcher::{apply_diff, apply_structured_edits};
 
         let path = request.path;
@@ -165,10 +174,8 @@ impl DeltaStreamer {
                 apply_diff(&existing_content, &operations)
                     .map_err(|e| SophonError::ParseError(e.to_string()))?
             }
-            FileChanges::Structured { edits } => {
-                apply_structured_edits(&existing_content, &edits)
-                    .map_err(|e| SophonError::InvalidAnchor(e.to_string()))?
-            }
+            FileChanges::Structured { edits } => apply_structured_edits(&existing_content, &edits)
+                .map_err(|e| SophonError::InvalidAnchor(e.to_string()))?,
         };
 
         if let Some(parent) = path.parent() {
@@ -215,7 +222,12 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), SophonError> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let tmp = parent.join(format!(".{}.sophon-{}-{}.tmp", file_name, std::process::id(), nonce));
+    let tmp = parent.join(format!(
+        ".{}.sophon-{}-{}.tmp",
+        file_name,
+        std::process::id(),
+        nonce
+    ));
 
     let mut f = fs::File::create(&tmp)?;
     f.write_all(bytes)?;

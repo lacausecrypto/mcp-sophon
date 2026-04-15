@@ -35,7 +35,8 @@ static FACT_PATTERNS: Lazy<Vec<FactPattern>> = Lazy::new(|| {
             template: "Using {1}",
         },
         FactPattern {
-            regex: Regex::new(r"(?i)(?:always|never|please|don't) (.+?)(?:\.|$)").expect("valid regex"),
+            regex: Regex::new(r"(?i)(?:always|never|please|don't) (.+?)(?:\.|$)")
+                .expect("valid regex"),
             category: FactCategory::Instruction,
             template: "Instruction: {0}",
         },
@@ -66,7 +67,10 @@ pub fn extract_facts(messages: &[Message]) -> Vec<Fact> {
                     continue;
                 }
 
-                if !facts.iter().any(|f: &Fact| f.content.eq_ignore_ascii_case(&content)) {
+                if !facts
+                    .iter()
+                    .any(|f: &Fact| f.content.eq_ignore_ascii_case(&content))
+                {
                     facts.push(Fact {
                         content,
                         established_at: idx,

@@ -143,7 +143,12 @@ pub fn build_digest(
             if symbol_count >= config.max_symbols_per_file {
                 break;
             }
-            let line_text = format!("  L{:<5} {:<9} {}\n", sym.line, sym.kind.as_str(), sym.signature);
+            let line_text = format!(
+                "  L{:<5} {:<9} {}\n",
+                sym.line,
+                sym.kind.as_str(),
+                sym.signature
+            );
             let line_tokens = count_tokens(&line_text);
             if total_tokens + line_tokens > config.max_tokens {
                 truncated = true;
@@ -210,12 +215,27 @@ mod tests {
     #[test]
     fn digest_respects_token_budget() {
         let recs = vec![
-            file("a.rs", "pub fn a_one() {}", vec![("a_one", SymbolKind::Function)]),
-            file("b.rs", "pub fn b_two() {}", vec![("b_two", SymbolKind::Function)]),
-            file("c.rs", "pub fn c_three() {}", vec![("c_three", SymbolKind::Function)]),
+            file(
+                "a.rs",
+                "pub fn a_one() {}",
+                vec![("a_one", SymbolKind::Function)],
+            ),
+            file(
+                "b.rs",
+                "pub fn b_two() {}",
+                vec![("b_two", SymbolKind::Function)],
+            ),
+            file(
+                "c.rs",
+                "pub fn c_three() {}",
+                vec![("c_three", SymbolKind::Function)],
+            ),
         ];
         let ranks = rank_files(&recs, None);
-        let cfg = DigestConfig { max_tokens: 80, ..Default::default() };
+        let cfg = DigestConfig {
+            max_tokens: 80,
+            ..Default::default()
+        };
         let d = build_digest(&recs, &ranks, None, &cfg);
         assert!(d.total_tokens <= 100, "tokens = {}", d.total_tokens);
         assert_eq!(d.total_files_scanned, 3);
@@ -224,13 +244,33 @@ mod tests {
     #[test]
     fn digest_sorts_by_rank_descending() {
         let recs = vec![
-            file("low.rs", "pub fn low() {}", vec![("low", SymbolKind::Function)]),
-            file("high.rs", "pub fn high() {}", vec![("high", SymbolKind::Function)]),
+            file(
+                "low.rs",
+                "pub fn low() {}",
+                vec![("low", SymbolKind::Function)],
+            ),
+            file(
+                "high.rs",
+                "pub fn high() {}",
+                vec![("high", SymbolKind::Function)],
+            ),
             // low.rs only defines `low`; high.rs and many other files
             // call `high`, bumping its rank.
-            file("u1.rs", "fn u1() { high() }", vec![("u1", SymbolKind::Function)]),
-            file("u2.rs", "fn u2() { high() }", vec![("u2", SymbolKind::Function)]),
-            file("u3.rs", "fn u3() { high() }", vec![("u3", SymbolKind::Function)]),
+            file(
+                "u1.rs",
+                "fn u1() { high() }",
+                vec![("u1", SymbolKind::Function)],
+            ),
+            file(
+                "u2.rs",
+                "fn u2() { high() }",
+                vec![("u2", SymbolKind::Function)],
+            ),
+            file(
+                "u3.rs",
+                "fn u3() { high() }",
+                vec![("u3", SymbolKind::Function)],
+            ),
         ];
         let ranks = rank_files(&recs, None);
         let d = build_digest(&recs, &ranks, None, &DigestConfig::default());

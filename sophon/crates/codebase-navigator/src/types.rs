@@ -55,7 +55,17 @@ pub struct Symbol {
 }
 
 impl Symbol {
-    pub fn new(name: impl Into<String>, kind: SymbolKind, line: u32, signature: impl Into<String>) -> Self {
-        Self { name: name.into(), kind, line, signature: signature.into() }
+    pub fn new(
+        name: impl Into<String>,
+        kind: SymbolKind,
+        line: u32,
+        signature: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            kind,
+            line,
+            signature: signature.into(),
+        }
     }
 }

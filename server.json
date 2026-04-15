@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.lacausecrypto/sophon",
   "title": "Sophon",
-  "description": "Honest token economics for MCP agents. Deterministic context layer in a single Rust binary: prompt compression, conversation memory, code navigation (11 AST languages), file delta streaming, output compression. Zero ML at runtime, cl100k_base accounting. Measured ~67% session token savings, ties mem0 on LOCOMO at sub-second vs 8.7 min, beats LLMLingua-2 on structured prompts by ~10pts at ~35x lower latency. Every number reproducible from BENCHMARK.md.",
+  "description": "Honest token economics for MCP agents. Rust binary, zero ML, reproducible benchmarks.",
   "version": "0.1.0",
   "repository": {
     "url": "https://github.com/lacausecrypto/mcp-sophon",

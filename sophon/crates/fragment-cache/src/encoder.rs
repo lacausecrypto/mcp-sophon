@@ -31,7 +31,11 @@ pub struct EncodedContent {
 }
 
 /// Encode content by replacing fragments with references.
-pub fn encode_content(content: &str, store: &FragmentStore, config: &EncoderConfig) -> EncodedContent {
+pub fn encode_content(
+    content: &str,
+    store: &FragmentStore,
+    config: &EncoderConfig,
+) -> EncodedContent {
     let mut result = content.to_string();
     let mut used_fragments = Vec::new();
     let mut tokens_saved = 0usize;
@@ -75,7 +79,8 @@ pub fn encode_content(content: &str, store: &FragmentStore, config: &EncoderConf
             continue;
         }
 
-        if replaced_tokens + fragment.token_count > max_replace_tokens && !used_fragments.is_empty() {
+        if replaced_tokens + fragment.token_count > max_replace_tokens && !used_fragments.is_empty()
+        {
             continue;
         }
 

@@ -105,9 +105,14 @@ impl ChunkStore {
             self.by_id.insert(chunk.id.clone(), chunk);
             return Ok(false);
         }
-        let entry = StoreEntry { chunk: chunk.clone() };
+        let entry = StoreEntry {
+            chunk: chunk.clone(),
+        };
         let line = serde_json::to_string(&entry)?;
-        let mut f = OpenOptions::new().create(true).append(true).open(&self.path)?;
+        let mut f = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)?;
         f.write_all(line.as_bytes())?;
         f.write_all(b"\n")?;
         f.flush()?;

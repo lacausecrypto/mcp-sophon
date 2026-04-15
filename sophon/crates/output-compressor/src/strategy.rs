@@ -137,7 +137,9 @@ pub fn run_pipeline(command: &str, output: &str, filter: &FilterConfig) -> Compr
     let ratio = if original_tokens == 0 {
         1.0
     } else {
-        (compressed_tokens as f32 / original_tokens as f32).min(1.0).max(0.0)
+        (compressed_tokens as f32 / original_tokens as f32)
+            .min(1.0)
+            .max(0.0)
     };
 
     CompressionResult {
@@ -153,18 +155,23 @@ pub fn run_pipeline(command: &str, output: &str, filter: &FilterConfig) -> Compr
 
 fn apply_strategy(input: &str, strategy: &CompressionStrategy) -> String {
     match strategy {
-        CompressionStrategy::FilterLines { remove_patterns, keep_patterns } => {
-            filter_lines(input, remove_patterns, keep_patterns)
-        }
-        CompressionStrategy::GroupBy { key_pattern, output_format, min_count } => {
-            group_by(input, key_pattern, output_format, *min_count)
-        }
-        CompressionStrategy::Deduplicate { similarity_threshold, output_format } => {
-            dedup::dedup_lines(input, *similarity_threshold, output_format)
-        }
-        CompressionStrategy::Truncate { max_lines, omission_message } => {
-            truncate::middle_truncate_lines(input, *max_lines, omission_message)
-        }
+        CompressionStrategy::FilterLines {
+            remove_patterns,
+            keep_patterns,
+        } => filter_lines(input, remove_patterns, keep_patterns),
+        CompressionStrategy::GroupBy {
+            key_pattern,
+            output_format,
+            min_count,
+        } => group_by(input, key_pattern, output_format, *min_count),
+        CompressionStrategy::Deduplicate {
+            similarity_threshold,
+            output_format,
+        } => dedup::dedup_lines(input, *similarity_threshold, output_format),
+        CompressionStrategy::Truncate {
+            max_lines,
+            omission_message,
+        } => truncate::middle_truncate_lines(input, *max_lines, omission_message),
         CompressionStrategy::ExtractColumns { fields } => extract_columns(input, fields),
     }
 }
@@ -226,7 +233,9 @@ fn extract_columns(input: &str, fields: &[String]) -> String {
     }
 
     let mut lines = input.lines();
-    let Some(header) = lines.next() else { return input.to_string() };
+    let Some(header) = lines.next() else {
+        return input.to_string();
+    };
 
     // Find column starts on the header line. Table headers like
     // `docker ps` output are whitespace-separated and positional.

@@ -141,7 +141,11 @@ mod tests {
     fn captures_const_and_type() {
         let src = "pub const MAX: usize = 10;\npub type Alias = Vec<u8>;";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "MAX" && s.kind == SymbolKind::Const));
-        assert!(syms.iter().any(|s| s.name == "Alias" && s.kind == SymbolKind::TypeAlias));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "MAX" && s.kind == SymbolKind::Const));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Alias" && s.kind == SymbolKind::TypeAlias));
     }
 }

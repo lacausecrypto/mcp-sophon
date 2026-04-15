@@ -82,7 +82,12 @@ impl SymbolExtractor for GoExtractor {
             }
 
             if let Some(caps) = GO_CONST_RE.captures(line) {
-                out.push(Symbol::new(&caps["name"], SymbolKind::Const, line_no, line.trim()));
+                out.push(Symbol::new(
+                    &caps["name"],
+                    SymbolKind::Const,
+                    line_no,
+                    line.trim(),
+                ));
                 continue;
             }
         }
@@ -100,18 +105,28 @@ mod tests {
 
     #[test]
     fn captures_func_and_method() {
-        let src = "package foo\n\nfunc Hello() string { return \"hi\" }\n\nfunc (r *Server) Serve() {}\n";
+        let src =
+            "package foo\n\nfunc Hello() string { return \"hi\" }\n\nfunc (r *Server) Serve() {}\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "Hello" && s.kind == SymbolKind::Function));
-        assert!(syms.iter().any(|s| s.name == "Serve" && s.kind == SymbolKind::Method));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Hello" && s.kind == SymbolKind::Function));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Serve" && s.kind == SymbolKind::Method));
     }
 
     #[test]
     fn captures_struct_and_interface() {
-        let src = "type User struct {\n  Name string\n}\n\ntype Greeter interface {\n  Hello()\n}\n";
+        let src =
+            "type User struct {\n  Name string\n}\n\ntype Greeter interface {\n  Hello()\n}\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Struct));
-        assert!(syms.iter().any(|s| s.name == "Greeter" && s.kind == SymbolKind::Interface));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "User" && s.kind == SymbolKind::Struct));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Greeter" && s.kind == SymbolKind::Interface));
     }
 
     #[test]

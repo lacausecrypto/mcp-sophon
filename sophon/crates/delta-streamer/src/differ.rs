@@ -3,9 +3,18 @@ use sophon_core::tokens::count_tokens;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DiffOperation {
-    Keep { start: usize, count: usize },
-    Delete { start: usize, count: usize },
-    Insert { at: usize, lines: Vec<String> },
+    Keep {
+        start: usize,
+        count: usize,
+    },
+    Delete {
+        start: usize,
+        count: usize,
+    },
+    Insert {
+        at: usize,
+        lines: Vec<String>,
+    },
     Replace {
         start: usize,
         delete_count: usize,

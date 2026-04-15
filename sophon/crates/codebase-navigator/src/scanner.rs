@@ -162,7 +162,12 @@ pub fn scan_directory<P: AsRef<Path>>(
         }
     }
 
-    Ok(scan_with_ignore_walker(&root_canonical, registry, max_files, max_file_size))
+    Ok(scan_with_ignore_walker(
+        &root_canonical,
+        registry,
+        max_files,
+        max_file_size,
+    ))
 }
 
 /// Try `git ls-files` against `root`. Returns `None` on any failure
@@ -228,7 +233,9 @@ fn scan_explicit_paths(
             break;
         }
         let absolute = root.join(&rel);
-        let Ok(metadata) = std::fs::metadata(&absolute) else { continue };
+        let Ok(metadata) = std::fs::metadata(&absolute) else {
+            continue;
+        };
         if !metadata.is_file() || metadata.len() > max_file_size {
             continue;
         }
@@ -289,7 +296,9 @@ pub fn list_scan_candidates(
                     break;
                 }
                 let absolute = root_canonical.join(&rel);
-                let Ok(metadata) = std::fs::metadata(&absolute) else { continue };
+                let Ok(metadata) = std::fs::metadata(&absolute) else {
+                    continue;
+                };
                 if !metadata.is_file() || metadata.len() > max_file_size {
                     continue;
                 }
@@ -317,7 +326,9 @@ pub fn list_scan_candidates(
             continue;
         }
         let path = entry.path();
-        let Ok(metadata) = std::fs::metadata(path) else { continue };
+        let Ok(metadata) = std::fs::metadata(path) else {
+            continue;
+        };
         if metadata.len() > max_file_size {
             continue;
         }
@@ -388,7 +399,7 @@ fn walk_with_ignore(root: &Path) -> ignore::Walk {
     let exclude_files: HashSet<&'static str> = HARD_EXCLUDE_FILES.iter().copied().collect();
 
     WalkBuilder::new(root)
-        .hidden(false)       // include dot-files; .gitignore handles the noise
+        .hidden(false) // include dot-files; .gitignore handles the noise
         .parents(true)
         .git_ignore(true)
         .git_exclude(true)
@@ -401,10 +412,7 @@ fn walk_with_ignore(root: &Path) -> ignore::Walk {
         .follow_links(false)
         .filter_entry(move |entry| {
             let name = entry.file_name().to_string_lossy();
-            let is_dir = entry
-                .file_type()
-                .map(|t| t.is_dir())
-                .unwrap_or(false);
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
             if is_dir && exclude_dirs.contains(name.as_ref()) {
                 return false;
             }
@@ -436,7 +444,9 @@ fn scan_with_ignore_walker(
             continue;
         }
         let path = entry.path().to_path_buf();
-        let Ok(metadata) = std::fs::metadata(&path) else { continue };
+        let Ok(metadata) = std::fs::metadata(&path) else {
+            continue;
+        };
         if metadata.len() > max_file_size {
             continue;
         }
@@ -534,8 +544,14 @@ mod tests {
         write(&dir.path().join("src/lib.rs"), "pub fn hello() {}");
         write(&dir.path().join("scripts/build.py"), "def build(): pass");
 
-        let records =
-            scan_directory(dir.path(), &ExtractorRegistry::new(), 1000, 1_000_000, false).unwrap();
+        let records = scan_directory(
+            dir.path(),
+            &ExtractorRegistry::new(),
+            1000,
+            1_000_000,
+            false,
+        )
+        .unwrap();
         assert_eq!(records.len(), 2);
         assert!(records.iter().all(|r| r.scan_source == ScanSource::Walkdir));
     }
@@ -544,11 +560,23 @@ mod tests {
     fn skips_excluded_directories() {
         let dir = tempdir().unwrap();
         write(&dir.path().join("src/lib.rs"), "pub fn ok() {}");
-        write(&dir.path().join("target/debug/should_be_skipped.rs"), "pub fn ghost() {}");
-        write(&dir.path().join("node_modules/foo/index.js"), "export function ghost() {}");
+        write(
+            &dir.path().join("target/debug/should_be_skipped.rs"),
+            "pub fn ghost() {}",
+        );
+        write(
+            &dir.path().join("node_modules/foo/index.js"),
+            "export function ghost() {}",
+        );
 
-        let records =
-            scan_directory(dir.path(), &ExtractorRegistry::new(), 1000, 1_000_000, false).unwrap();
+        let records = scan_directory(
+            dir.path(),
+            &ExtractorRegistry::new(),
+            1000,
+            1_000_000,
+            false,
+        )
+        .unwrap();
         assert_eq!(records.len(), 1);
         assert!(records[0].relative_path.ends_with("lib.rs"));
     }
@@ -583,8 +611,14 @@ mod tests {
         write(&dir.path().join("notes.txt"), "just text, not code");
         write(&dir.path().join("readme.md"), "# docs");
         write(&dir.path().join("lib.rs"), "pub fn f() {}");
-        let records =
-            scan_directory(dir.path(), &ExtractorRegistry::new(), 1000, 1_000_000, false).unwrap();
+        let records = scan_directory(
+            dir.path(),
+            &ExtractorRegistry::new(),
+            1000,
+            1_000_000,
+            false,
+        )
+        .unwrap();
         assert_eq!(records.len(), 1);
     }
 
@@ -599,13 +633,21 @@ mod tests {
         write(&dir.path().join("src/secret.rs"), "pub fn leak() {}");
         write(&dir.path().join("generated/auto.rs"), "pub fn ghost() {}");
 
-        let records =
-            scan_directory(dir.path(), &ExtractorRegistry::new(), 1000, 1_000_000, false).unwrap();
+        let records = scan_directory(
+            dir.path(),
+            &ExtractorRegistry::new(),
+            1000,
+            1_000_000,
+            false,
+        )
+        .unwrap();
         // The `ignore` crate parses .gitignore even without a .git dir
         // being present. All records tagged Walkdir (fallback path).
         assert!(records.iter().all(|r| r.scan_source == ScanSource::Walkdir));
         assert!(records.iter().any(|r| r.relative_path.ends_with("lib.rs")));
-        assert!(!records.iter().any(|r| r.relative_path.ends_with("secret.rs")));
+        assert!(!records
+            .iter()
+            .any(|r| r.relative_path.ends_with("secret.rs")));
         assert!(!records.iter().any(|r| r.relative_path.ends_with("auto.rs")));
     }
 
@@ -649,11 +691,15 @@ mod tests {
             scan_directory(dir.path(), &ExtractorRegistry::new(), 1000, 1_000_000, true).unwrap();
 
         // git path should tag every record with GitLsFiles
-        assert!(records.iter().all(|r| r.scan_source == ScanSource::GitLsFiles));
+        assert!(records
+            .iter()
+            .all(|r| r.scan_source == ScanSource::GitLsFiles));
         // lib.rs is neither tracked nor ignored → included via --others
         assert!(records.iter().any(|r| r.relative_path.ends_with("lib.rs")));
         // secret.rs is in .gitignore → excluded
-        assert!(!records.iter().any(|r| r.relative_path.ends_with("secret.rs")));
+        assert!(!records
+            .iter()
+            .any(|r| r.relative_path.ends_with("secret.rs")));
         // generated/ is in .gitignore → excluded
         assert!(!records.iter().any(|r| r.relative_path.ends_with("auto.rs")));
     }
@@ -670,13 +716,21 @@ mod tests {
         write(&dir.path().join("src/lib.rs"), "pub fn ok() {}");
         write(&dir.path().join("src/secret.rs"), "pub fn leak() {}");
 
-        let records =
-            scan_directory(dir.path(), &ExtractorRegistry::new(), 1000, 1_000_000, false).unwrap();
+        let records = scan_directory(
+            dir.path(),
+            &ExtractorRegistry::new(),
+            1000,
+            1_000_000,
+            false,
+        )
+        .unwrap();
         // `ignore` walker is used and *also* parses .gitignore, so
         // secret.rs should now be excluded even with prefer_git=false.
         // This is the correctness win over the old walkdir fallback.
         assert!(records.iter().all(|r| r.scan_source == ScanSource::Walkdir));
-        assert!(!records.iter().any(|r| r.relative_path.ends_with("secret.rs")));
+        assert!(!records
+            .iter()
+            .any(|r| r.relative_path.ends_with("secret.rs")));
         assert!(records.iter().any(|r| r.relative_path.ends_with("lib.rs")));
     }
 

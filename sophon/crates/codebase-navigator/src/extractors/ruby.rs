@@ -82,13 +82,23 @@ impl SymbolExtractor for RubyExtractor {
             }
 
             if let Some(caps) = RB_CLASS_RE.captures(line) {
-                out.push(Symbol::new(&caps["name"], SymbolKind::Class, line_no, trimmed));
+                out.push(Symbol::new(
+                    &caps["name"],
+                    SymbolKind::Class,
+                    line_no,
+                    trimmed,
+                ));
                 container_indents.push(indent_len);
                 continue;
             }
 
             if let Some(caps) = RB_MODULE_RE.captures(line) {
-                out.push(Symbol::new(&caps["name"], SymbolKind::Module, line_no, trimmed));
+                out.push(Symbol::new(
+                    &caps["name"],
+                    SymbolKind::Module,
+                    line_no,
+                    trimmed,
+                ));
                 container_indents.push(indent_len);
                 continue;
             }
@@ -134,25 +144,39 @@ mod tests {
     fn captures_class_and_methods() {
         let src = "class User\n  def initialize(name)\n    @name = name\n  end\n\n  def greet?\n    \"hi\"\n  end\nend\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Class));
-        assert!(syms.iter().any(|s| s.name == "initialize" && s.kind == SymbolKind::Method));
-        assert!(syms.iter().any(|s| s.name == "greet?" && s.kind == SymbolKind::Method));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "User" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "initialize" && s.kind == SymbolKind::Method));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "greet?" && s.kind == SymbolKind::Method));
     }
 
     #[test]
     fn captures_module() {
         let src = "module Authentication\n  def self.sign_in(user)\n  end\nend\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "Authentication" && s.kind == SymbolKind::Module));
-        assert!(syms.iter().any(|s| s.name == "sign_in" && s.kind == SymbolKind::Method));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Authentication" && s.kind == SymbolKind::Module));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "sign_in" && s.kind == SymbolKind::Method));
     }
 
     #[test]
     fn captures_class_inheritance() {
         let src = "class Admin < User\n  def role\n    :admin\n  end\nend\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "Admin" && s.kind == SymbolKind::Class));
-        assert!(syms.iter().any(|s| s.name == "role" && s.kind == SymbolKind::Method));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Admin" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "role" && s.kind == SymbolKind::Method));
     }
 
     #[test]

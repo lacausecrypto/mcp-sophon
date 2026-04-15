@@ -150,9 +150,11 @@ pub fn handle_tool_call(
                 .map(|m| Message::new(parse_role(&m.role), m.content))
                 .collect::<Vec<_>>();
 
-            let compressed = server
-                .memory_manager
-                .compress_with_overrides(&messages, args.max_tokens, args.recent_window);
+            let compressed = server.memory_manager.compress_with_overrides(
+                &messages,
+                args.max_tokens,
+                args.recent_window,
+            );
 
             let original_tokens: usize = messages.iter().map(|m| m.token_count).sum();
             server
@@ -303,7 +305,9 @@ pub fn handle_tool_call(
         }
         "compress_output" => {
             let args: CompressOutputArgs = serde_json::from_value(arguments)?;
-            let result = server.output_compressor.compress(&args.command, &args.output);
+            let result = server
+                .output_compressor
+                .compress(&args.command, &args.output);
             server.stats.record(
                 "output_compressor",
                 result.original_tokens,
@@ -333,9 +337,7 @@ pub fn handle_tool_call(
             // previously meant the client couldn't pick up filesystem
             // changes without `force_rescan=true`.
             let root = root_to_scan.ok_or_else(|| {
-                anyhow::anyhow!(
-                    "navigate_codebase: no root provided and no cached scan available"
-                )
+                anyhow::anyhow!("navigate_codebase: no root provided and no cached scan available")
             })?;
             let scan_result = server
                 .codebase_navigator
@@ -359,17 +361,18 @@ pub fn handle_tool_call(
                 .iter()
                 .map(|r| (r.byte_size as usize) / 4)
                 .sum();
-            server.stats.record(
-                "codebase_navigator",
-                original_estimate,
-                digest.total_tokens,
-            );
+            server
+                .stats
+                .record("codebase_navigator", original_estimate, digest.total_tokens);
 
             // Merge the digest payload with the scan diagnostics so the
             // caller sees both in one response object.
             let mut value = serde_json::to_value(digest)?;
             if let Some(obj) = value.as_object_mut() {
-                obj.insert("scan_result".to_string(), serde_json::to_value(&scan_result)?);
+                obj.insert(
+                    "scan_result".to_string(),
+                    serde_json::to_value(&scan_result)?,
+                );
             }
             Ok(value)
         }
@@ -413,8 +416,12 @@ fn run_retrieval(
     query: Option<&str>,
     top_k_override: Option<usize>,
 ) -> anyhow::Result<Option<Value>> {
-    let Some(query) = query else { return Ok(None); };
-    let Some(retriever) = server.retriever.as_mut() else { return Ok(None); };
+    let Some(query) = query else {
+        return Ok(None);
+    };
+    let Some(retriever) = server.retriever.as_mut() else {
+        return Ok(None);
+    };
     if query.trim().is_empty() {
         return Ok(None);
     }
@@ -462,9 +469,11 @@ fn run_retrieval(
     };
 
     let total_retrieved_tokens: usize = result.chunks.iter().map(|c| c.chunk.token_count).sum();
-    server
-        .stats
-        .record("semantic_retriever", count_tokens(query), total_retrieved_tokens);
+    server.stats.record(
+        "semantic_retriever",
+        count_tokens(query),
+        total_retrieved_tokens,
+    );
 
     Ok(Some(json!({
         "query": query,

@@ -47,7 +47,10 @@ impl Default for HashEmbedder {
 
 impl HashEmbedder {
     pub fn new(dim: usize) -> Self {
-        Self { dim, use_char_ngrams: true }
+        Self {
+            dim,
+            use_char_ngrams: true,
+        }
     }
 
     pub fn with_char_ngrams(mut self, enabled: bool) -> Self {
@@ -140,7 +143,9 @@ mod tests {
     fn dimension_consistency() {
         let e = HashEmbedder::default();
         let a = e.embed("hi").unwrap();
-        let b = e.embed("a much longer piece of text with many tokens").unwrap();
+        let b = e
+            .embed("a much longer piece of text with many tokens")
+            .unwrap();
         assert_eq!(a.len(), e.dimension());
         assert_eq!(b.len(), e.dimension());
     }

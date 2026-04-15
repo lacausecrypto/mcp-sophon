@@ -99,7 +99,12 @@ impl SymbolExtractor for JavaExtractor {
             }
 
             if let Some(caps) = JAVA_CONST_RE.captures(line) {
-                out.push(Symbol::new(&caps["name"], SymbolKind::Const, line_no, trimmed));
+                out.push(Symbol::new(
+                    &caps["name"],
+                    SymbolKind::Const,
+                    line_no,
+                    trimmed,
+                ));
                 continue;
             }
 
@@ -138,31 +143,45 @@ mod tests {
     fn captures_public_class_and_interface() {
         let src = "package com.example;\n\npublic class Foo {}\n\npublic interface Bar {}\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "Foo" && s.kind == SymbolKind::Class));
-        assert!(syms.iter().any(|s| s.name == "Bar" && s.kind == SymbolKind::Interface));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Foo" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Bar" && s.kind == SymbolKind::Interface));
     }
 
     #[test]
     fn captures_enum_and_record() {
         let src = "public enum Color { RED, GREEN }\n\npublic record Point(int x, int y) {}\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "Color" && s.kind == SymbolKind::Enum));
-        assert!(syms.iter().any(|s| s.name == "Point" && s.kind == SymbolKind::Struct));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Color" && s.kind == SymbolKind::Enum));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Point" && s.kind == SymbolKind::Struct));
     }
 
     #[test]
     fn captures_methods_with_modifiers() {
         let src = "public class Service {\n    public void start() {}\n    private static int count(List<String> items) { return items.size(); }\n}\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "start" && s.kind == SymbolKind::Method));
-        assert!(syms.iter().any(|s| s.name == "count" && s.kind == SymbolKind::Method));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "start" && s.kind == SymbolKind::Method));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "count" && s.kind == SymbolKind::Method));
     }
 
     #[test]
     fn captures_public_constant() {
         let src = "public class C {\n    public static final int MAX_RETRIES = 5;\n}\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "MAX_RETRIES" && s.kind == SymbolKind::Const));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "MAX_RETRIES" && s.kind == SymbolKind::Const));
     }
 
     #[test]

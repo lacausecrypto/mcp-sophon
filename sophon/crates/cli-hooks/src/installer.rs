@@ -113,10 +113,7 @@ impl HookInstaller {
         }
     }
 
-    fn settings_path_for(
-        agent: SupportedAgent,
-        global: bool,
-    ) -> Result<PathBuf, InstallError> {
+    fn settings_path_for(agent: SupportedAgent, global: bool) -> Result<PathBuf, InstallError> {
         match agent {
             SupportedAgent::Claude => Self::claude_settings_path(global),
             other => Err(InstallError::AgentNotSupported(other.as_str())),
@@ -137,13 +134,11 @@ impl HookInstaller {
             .as_object_mut()
             .ok_or_else(|| InstallError::InvalidSettings("hooks is not an object".into()))?;
 
-        let pre = hooks_obj
-            .entry("PreToolUse")
-            .or_insert_with(|| json!([]));
+        let pre = hooks_obj.entry("PreToolUse").or_insert_with(|| json!([]));
 
-        let pre_arr = pre
-            .as_array_mut()
-            .ok_or_else(|| InstallError::InvalidSettings("hooks.PreToolUse is not an array".into()))?;
+        let pre_arr = pre.as_array_mut().ok_or_else(|| {
+            InstallError::InvalidSettings("hooks.PreToolUse is not an array".into())
+        })?;
 
         // Remove any existing Sophon entry so repeated installs are
         // idempotent.
@@ -326,9 +321,18 @@ mod tests {
 
     #[test]
     fn parse_supported_agent() {
-        assert_eq!(SupportedAgent::parse("claude"), Some(SupportedAgent::Claude));
-        assert_eq!(SupportedAgent::parse("Claude-Code"), Some(SupportedAgent::Claude));
-        assert_eq!(SupportedAgent::parse("cursor"), Some(SupportedAgent::Cursor));
+        assert_eq!(
+            SupportedAgent::parse("claude"),
+            Some(SupportedAgent::Claude)
+        );
+        assert_eq!(
+            SupportedAgent::parse("Claude-Code"),
+            Some(SupportedAgent::Claude)
+        );
+        assert_eq!(
+            SupportedAgent::parse("cursor"),
+            Some(SupportedAgent::Cursor)
+        );
         assert_eq!(SupportedAgent::parse("nope"), None);
     }
 
@@ -412,17 +416,16 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = tmp_settings(&dir);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(
-            &path,
-            r#"{"permissions":{"allow":["Bash(cargo test)"]}}"#,
-        )
-        .unwrap();
+        fs::write(&path, r#"{"permissions":{"allow":["Bash(cargo test)"]}}"#).unwrap();
 
         HookInstaller::install_at(SupportedAgent::Claude, path.clone()).unwrap();
 
         let raw = fs::read_to_string(&path).unwrap();
         let parsed: Value = serde_json::from_str(&raw).unwrap();
-        assert!(parsed.get("permissions").is_some(), "pre-existing keys lost");
+        assert!(
+            parsed.get("permissions").is_some(),
+            "pre-existing keys lost"
+        );
         assert!(parsed.get("hooks").is_some(), "hooks key missing");
     }
 }

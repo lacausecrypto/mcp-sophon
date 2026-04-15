@@ -36,10 +36,10 @@ async fn main() -> anyhow::Result<()> {
             server.run_stdio().await?;
         }
         "compress-prompt" => {
-            let prompt_path = arg_value(&args, "--prompt")
-                .ok_or_else(|| anyhow::anyhow!("missing --prompt"))?;
-            let query = arg_value(&args, "--query")
-                .ok_or_else(|| anyhow::anyhow!("missing --query"))?;
+            let prompt_path =
+                arg_value(&args, "--prompt").ok_or_else(|| anyhow::anyhow!("missing --prompt"))?;
+            let query =
+                arg_value(&args, "--query").ok_or_else(|| anyhow::anyhow!("missing --query"))?;
             let max_tokens = arg_value(&args, "--max-tokens").and_then(|s| s.parse::<usize>().ok());
             let prompt = fs::read_to_string(prompt_path)?;
 
@@ -50,8 +50,8 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&output)?);
         }
         "compress-history" => {
-            let input_path = arg_value(&args, "--input")
-                .ok_or_else(|| anyhow::anyhow!("missing --input"))?;
+            let input_path =
+                arg_value(&args, "--input").ok_or_else(|| anyhow::anyhow!("missing --input"))?;
             let raw = fs::read_to_string(input_path)?;
             let messages: serde_json::Value = serde_json::from_str(&raw)?;
 
@@ -61,8 +61,7 @@ async fn main() -> anyhow::Result<()> {
         }
         "stats" => {
             let period = arg_value(&args, "--period").unwrap_or_else(|| "session".to_string());
-            let output =
-                server.handle_tool_call("get_token_stats", json!({"period": period}))?;
+            let output = server.handle_tool_call("get_token_stats", json!({"period": period}))?;
             println!("{}", serde_json::to_string_pretty(&output)?);
         }
         other => {
@@ -115,7 +114,10 @@ fn run_codebase_scan(args: &[String]) -> anyhow::Result<()> {
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(1500);
 
-    let cfg = NavigatorConfig { prefer_git, ..Default::default() };
+    let cfg = NavigatorConfig {
+        prefer_git,
+        ..Default::default()
+    };
     let mut nav = Navigator::new(cfg);
 
     let t0 = Instant::now();
@@ -248,7 +250,9 @@ fn run_compress_output(args: &[String]) -> anyhow::Result<()> {
 fn run_hook(args: &[String]) -> anyhow::Result<()> {
     let sub = args
         .get(2)
-        .ok_or_else(|| anyhow::anyhow!("missing hook subcommand (rewrite|install|uninstall|status)"))?
+        .ok_or_else(|| {
+            anyhow::anyhow!("missing hook subcommand (rewrite|install|uninstall|status)")
+        })?
         .as_str();
 
     match sub {
@@ -268,14 +272,22 @@ fn run_hook(args: &[String]) -> anyhow::Result<()> {
             let cmd = if let Some(c) = arg_value(args, "--command") {
                 c
             } else if let Some(sep_idx) = args.iter().position(|a| a == "--") {
-                args.iter().skip(sep_idx + 1).cloned().collect::<Vec<_>>().join(" ")
+                args.iter()
+                    .skip(sep_idx + 1)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" ")
             } else {
                 // Fallback: skip the known flags and join the tail.
                 let mut skip = 3; // sophon hook rewrite
                 if arg_value(args, "--agent").is_some() {
                     skip += 2;
                 }
-                args.iter().skip(skip).cloned().collect::<Vec<_>>().join(" ")
+                args.iter()
+                    .skip(skip)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" ")
             };
 
             if cmd.trim().is_empty() {
@@ -291,7 +303,11 @@ fn run_hook(args: &[String]) -> anyhow::Result<()> {
                         json!({"action": "passthrough", "command": c}).to_string()
                     );
                 }
-                RewriteResult::Rewritten { original, rewritten, rule } => {
+                RewriteResult::Rewritten {
+                    original,
+                    rewritten,
+                    rule,
+                } => {
                     println!(
                         "{}",
                         json!({
@@ -332,7 +348,10 @@ fn run_hook(args: &[String]) -> anyhow::Result<()> {
         }
         "status" => {
             let rewriter = CommandRewriter::new();
-            println!("Sophon hook rewriter — {} rules loaded", rewriter.rules().len());
+            println!(
+                "Sophon hook rewriter — {} rules loaded",
+                rewriter.rules().len()
+            );
             for rule in rewriter.rules() {
                 println!("  {:20}  {}", rule.name, rule.pattern.as_str());
             }

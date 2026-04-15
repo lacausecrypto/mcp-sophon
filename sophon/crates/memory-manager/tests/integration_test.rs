@@ -26,7 +26,9 @@ fn test_fact_extraction() {
     let facts = extract_facts(&messages);
 
     assert!(facts.iter().any(|f| f.content.contains("Alice")));
-    assert!(facts.iter().any(|f| f.content.contains("software engineer")));
+    assert!(facts
+        .iter()
+        .any(|f| f.content.contains("software engineer")));
     assert!(facts.iter().any(|f| f.content.contains("React")));
 }
 

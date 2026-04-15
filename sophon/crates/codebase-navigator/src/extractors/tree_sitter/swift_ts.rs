@@ -29,8 +29,12 @@ mod tests {
         let ext = new();
         let src = "class User {\n  func greet() -> String { return \"hi\" }\n}\nfunc main() {}\n";
         let syms = ext.extract(src);
-        assert!(syms.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Class));
-        assert!(syms.iter().any(|s| s.name == "main" && s.kind == SymbolKind::Function));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "User" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "main" && s.kind == SymbolKind::Function));
     }
 
     #[test]
@@ -38,7 +42,11 @@ mod tests {
         let ext = new();
         let src = "protocol Drawable { func draw() }\ntypealias Id = Int\n";
         let syms = ext.extract(src);
-        assert!(syms.iter().any(|s| s.name == "Drawable" && s.kind == SymbolKind::Interface));
-        assert!(syms.iter().any(|s| s.name == "Id" && s.kind == SymbolKind::TypeAlias));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Drawable" && s.kind == SymbolKind::Interface));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Id" && s.kind == SymbolKind::TypeAlias));
     }
 }

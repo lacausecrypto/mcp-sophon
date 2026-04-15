@@ -54,8 +54,8 @@ mod tests {
         // them all into a single dedup bucket. We want to exercise the
         // truncate strategy.
         let words = [
-            "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf",
-            "hotel", "india", "juliet", "kilo", "lima", "mike", "november",
+            "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india",
+            "juliet", "kilo", "lima", "mike", "november",
         ];
         let input = (0..1000)
             .map(|i| {
@@ -73,7 +73,11 @@ mod tests {
         // Either the truncate strategy fired OR dedup collapsed many
         // lines — both count as "generic did its job". Assert strong
         // compression rather than a specific marker string.
-        assert!(r.compressed.lines().count() < 300, "{} lines", r.compressed.lines().count());
+        assert!(
+            r.compressed.lines().count() < 300,
+            "{} lines",
+            r.compressed.lines().count()
+        );
         assert!(r.ratio < 0.5, "ratio = {}", r.ratio);
     }
 }

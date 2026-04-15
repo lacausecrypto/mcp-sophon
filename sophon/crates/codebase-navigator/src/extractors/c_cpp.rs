@@ -39,8 +39,9 @@ static CPP_TYPE_RE: Lazy<Regex> = Lazy::new(|| {
 });
 
 /// `typedef ... Name;`
-static CPP_TYPEDEF_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^\s*typedef\s+[^;{]+\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*;").unwrap());
+static CPP_TYPEDEF_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^\s*typedef\s+[^;{]+\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*;").unwrap()
+});
 
 /// C++11 `using Name = ...;`
 static CPP_USING_RE: Lazy<Regex> = Lazy::new(|| {
@@ -102,7 +103,9 @@ impl SymbolExtractor for CCppExtractor {
     }
 
     fn extensions(&self) -> &'static [&'static str] {
-        &["c", "h", "cc", "cpp", "cxx", "hpp", "hh", "hxx", "c++", "h++"]
+        &[
+            "c", "h", "cc", "cpp", "cxx", "hpp", "hh", "hxx", "c++", "h++",
+        ]
     }
 
     fn extract(&self, source: &str) -> Vec<Symbol> {
@@ -114,7 +117,12 @@ impl SymbolExtractor for CCppExtractor {
             let trimmed = line.trim().to_string();
 
             if let Some(caps) = CPP_DEFINE_RE.captures(line) {
-                out.push(Symbol::new(&caps["name"], SymbolKind::Const, line_no, trimmed));
+                out.push(Symbol::new(
+                    &caps["name"],
+                    SymbolKind::Const,
+                    line_no,
+                    trimmed,
+                ));
                 continue;
             }
 
@@ -138,12 +146,22 @@ impl SymbolExtractor for CCppExtractor {
             }
 
             if let Some(caps) = CPP_TYPEDEF_RE.captures(line) {
-                out.push(Symbol::new(&caps["name"], SymbolKind::TypeAlias, line_no, trimmed));
+                out.push(Symbol::new(
+                    &caps["name"],
+                    SymbolKind::TypeAlias,
+                    line_no,
+                    trimmed,
+                ));
                 continue;
             }
 
             if let Some(caps) = CPP_USING_RE.captures(line) {
-                out.push(Symbol::new(&caps["name"], SymbolKind::TypeAlias, line_no, trimmed));
+                out.push(Symbol::new(
+                    &caps["name"],
+                    SymbolKind::TypeAlias,
+                    line_no,
+                    trimmed,
+                ));
                 continue;
             }
 
@@ -157,7 +175,11 @@ impl SymbolExtractor for CCppExtractor {
                 // being the variable. We guarded with the `(…)` +
                 // `{|;|->` pattern but an additional check on
                 // `caps["ret"]` ensures it isn't empty.
-                if caps.name("ret").map(|m| m.as_str().trim().is_empty()).unwrap_or(true) {
+                if caps
+                    .name("ret")
+                    .map(|m| m.as_str().trim().is_empty())
+                    .unwrap_or(true)
+                {
                     continue;
                 }
                 out.push(Symbol::new(name, SymbolKind::Function, line_no, trimmed));
@@ -179,31 +201,49 @@ mod tests {
     fn captures_c_functions_and_struct() {
         let src = "#include <stdio.h>\n\nstatic int add(int a, int b) { return a + b; }\nvoid greet(const char *name);\nstruct Point { int x; int y; };\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "add" && s.kind == SymbolKind::Function));
-        assert!(syms.iter().any(|s| s.name == "greet" && s.kind == SymbolKind::Function));
-        assert!(syms.iter().any(|s| s.name == "Point" && s.kind == SymbolKind::Struct));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "add" && s.kind == SymbolKind::Function));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "greet" && s.kind == SymbolKind::Function));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Point" && s.kind == SymbolKind::Struct));
     }
 
     #[test]
     fn captures_cpp_class_and_namespace() {
         let src = "namespace foo {\n\nclass Widget {\npublic:\n    void render();\n};\n\n}\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "foo" && s.kind == SymbolKind::Module));
-        assert!(syms.iter().any(|s| s.name == "Widget" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "foo" && s.kind == SymbolKind::Module));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Widget" && s.kind == SymbolKind::Class));
     }
 
     #[test]
     fn captures_typedef_using_and_define() {
-        let src = "typedef unsigned long u64;\nusing Callback = void (*)(int);\n#define MAX_LEN 1024\n";
+        let src =
+            "typedef unsigned long u64;\nusing Callback = void (*)(int);\n#define MAX_LEN 1024\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "u64" && s.kind == SymbolKind::TypeAlias));
-        assert!(syms.iter().any(|s| s.name == "Callback" && s.kind == SymbolKind::TypeAlias));
-        assert!(syms.iter().any(|s| s.name == "MAX_LEN" && s.kind == SymbolKind::Const));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "u64" && s.kind == SymbolKind::TypeAlias));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Callback" && s.kind == SymbolKind::TypeAlias));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "MAX_LEN" && s.kind == SymbolKind::Const));
     }
 
     #[test]
     fn skips_control_flow_statements() {
-        let src = "int main() {\n    if (x) { do_it(); }\n    while (y) { step(); }\n    return 0;\n}\n";
+        let src =
+            "int main() {\n    if (x) { do_it(); }\n    while (y) { step(); }\n    return 0;\n}\n";
         let syms = extract(src);
         let names: Vec<_> = syms.iter().map(|s| s.name.as_str()).collect();
         assert!(names.contains(&"main"));
@@ -215,7 +255,11 @@ mod tests {
     fn captures_enum_class_and_template() {
         let src = "enum class Color { Red, Green };\ntemplate<typename T>\nclass Holder {};\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "Color" && s.kind == SymbolKind::Enum));
-        assert!(syms.iter().any(|s| s.name == "Holder" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Color" && s.kind == SymbolKind::Enum));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Holder" && s.kind == SymbolKind::Class));
     }
 }

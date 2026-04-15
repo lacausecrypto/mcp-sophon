@@ -13,10 +13,7 @@ fn rx(p: &str) -> Regex {
 pub fn ls_filter() -> FilterConfig {
     FilterConfig {
         name: "ls_tree",
-        command_patterns: vec![
-            rx(r"^\s*ls(\s|$)"),
-            rx(r"^\s*tree(\s|$)"),
-        ],
+        command_patterns: vec![rx(r"^\s*ls(\s|$)"), rx(r"^\s*tree(\s|$)")],
         strategies: vec![
             CompressionStrategy::GroupBy {
                 key_pattern: rx(r"\.([a-zA-Z0-9]{1,10})\s*$"),
@@ -129,6 +126,10 @@ src/lib.rs:10:}"#;
             .join("\n");
         let f = find_filter();
         let r = run_pipeline("find . -name '*.rs'", &input, &f);
-        assert!(r.compressed.contains("./src/tests/: 10 entries"), "got: {}", r.compressed);
+        assert!(
+            r.compressed.contains("./src/tests/: 10 entries"),
+            "got: {}",
+            r.compressed
+        );
     }
 }

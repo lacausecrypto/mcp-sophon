@@ -62,7 +62,10 @@ impl Default for OutputCompressor {
 
 impl OutputCompressor {
     pub fn new(config: OutputCompressorConfig) -> Self {
-        Self { registry: FilterRegistry::new(), config }
+        Self {
+            registry: FilterRegistry::new(),
+            config,
+        }
     }
 
     pub fn registry(&self) -> &FilterRegistry {
@@ -112,7 +115,9 @@ impl OutputCompressor {
     }
 
     fn rotate(&self, keep: usize) {
-        let Ok(entries) = std::fs::read_dir(&self.config.tee_dir) else { return };
+        let Ok(entries) = std::fs::read_dir(&self.config.tee_dir) else {
+            return;
+        };
         let mut files: Vec<_> = entries
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))

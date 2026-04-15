@@ -54,7 +54,10 @@ pub fn apply_diff(base: &str, operations: &[DiffOperation]) -> Result<String, Pa
                 }
                 lines.drain(idx..idx + count);
             }
-            DiffOperation::Insert { at, lines: new_lines } => {
+            DiffOperation::Insert {
+                at,
+                lines: new_lines,
+            } => {
                 let idx = at.saturating_sub(1).min(lines.len());
                 for (offset, line) in new_lines.iter().enumerate() {
                     lines.insert(idx + offset, line.clone());
@@ -83,7 +86,10 @@ pub fn apply_diff(base: &str, operations: &[DiffOperation]) -> Result<String, Pa
 }
 
 /// Apply structured edits (safer than raw diff).
-pub fn apply_structured_edits(content: &str, edits: &[StructuredEdit]) -> Result<String, EditError> {
+pub fn apply_structured_edits(
+    content: &str,
+    edits: &[StructuredEdit],
+) -> Result<String, EditError> {
     let (mut lines, had_trailing_newline) = split_lines(content);
 
     let mut resolved = Vec::new();
@@ -100,14 +106,20 @@ pub fn apply_structured_edits(content: &str, edits: &[StructuredEdit]) -> Result
 
         match operation {
             EditOperation::Replace { new_content } => {
-                let replacement = new_content.lines().map(|line| line.to_string()).collect::<Vec<_>>();
+                let replacement = new_content
+                    .lines()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>();
                 if start_idx > end_idx || end_idx > lines.len() {
                     return Err(EditError::InvalidLineRange(start, end));
                 }
                 lines.splice(start_idx..end_idx, replacement);
             }
             EditOperation::InsertBefore { content } => {
-                let insert = content.lines().map(|line| line.to_string()).collect::<Vec<_>>();
+                let insert = content
+                    .lines()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>();
                 if start_idx > lines.len() {
                     return Err(EditError::InvalidLineRange(start, end));
                 }
@@ -116,7 +128,10 @@ pub fn apply_structured_edits(content: &str, edits: &[StructuredEdit]) -> Result
                 }
             }
             EditOperation::InsertAfter { content } => {
-                let insert = content.lines().map(|line| line.to_string()).collect::<Vec<_>>();
+                let insert = content
+                    .lines()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>();
                 let at = end_idx.min(lines.len());
                 for (offset, line) in insert.into_iter().enumerate() {
                     lines.insert(at + offset, line);
@@ -160,9 +175,16 @@ fn resolve_anchor(lines: &[String], anchor: &EditAnchor) -> Result<(usize, usize
     }
 }
 
-fn resolve_symbol(lines: &[String], name: &str, kind: &SymbolKind) -> Result<(usize, usize), EditError> {
+fn resolve_symbol(
+    lines: &[String],
+    name: &str,
+    kind: &SymbolKind,
+) -> Result<(usize, usize), EditError> {
     let pattern = match kind {
-        SymbolKind::Function => format!(r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+{}\b", regex::escape(name)),
+        SymbolKind::Function => format!(
+            r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+{}\b",
+            regex::escape(name)
+        ),
         SymbolKind::Class => format!(r"^\s*class\s+{}\b", regex::escape(name)),
         SymbolKind::Struct => format!(r"^\s*(?:pub\s+)?struct\s+{}\b", regex::escape(name)),
         SymbolKind::Enum => format!(r"^\s*(?:pub\s+)?enum\s+{}\b", regex::escape(name)),
@@ -203,7 +225,10 @@ fn find_block_end(lines: &[String], start_line: usize) -> usize {
 
 fn split_lines(content: &str) -> (Vec<String>, bool) {
     let trailing = content.ends_with('\n');
-    let lines = content.lines().map(|line| line.to_string()).collect::<Vec<_>>();
+    let lines = content
+        .lines()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
     (lines, trailing)
 }
 

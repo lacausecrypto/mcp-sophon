@@ -40,12 +40,16 @@ pub struct FileWriteRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FileChanges {
-    Full { content: String },
+    Full {
+        content: String,
+    },
     Delta {
         base_version: u64,
         operations: Vec<DiffOperation>,
     },
-    Structured { edits: Vec<StructuredEdit> },
+    Structured {
+        edits: Vec<StructuredEdit>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -26,8 +26,12 @@ mod tests {
         let ext = new();
         let src = "class User\n  def initialize(name)\n    @name = name\n  end\nend\n";
         let syms = ext.extract(src);
-        assert!(syms.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Class));
-        assert!(syms.iter().any(|s| s.name == "initialize" && s.kind == SymbolKind::Method));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "User" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "initialize" && s.kind == SymbolKind::Method));
     }
 
     #[test]
@@ -35,8 +39,12 @@ mod tests {
         let ext = new();
         let src = "module Authentication\n  def self.sign_in(user)\n    user.touch\n  end\nend\n";
         let syms = ext.extract(src);
-        assert!(syms.iter().any(|s| s.name == "Authentication" && s.kind == SymbolKind::Module));
-        assert!(syms.iter().any(|s| s.name == "sign_in" && s.kind == SymbolKind::Method));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Authentication" && s.kind == SymbolKind::Module));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "sign_in" && s.kind == SymbolKind::Method));
     }
 
     #[test]

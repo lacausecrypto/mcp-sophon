@@ -5,8 +5,8 @@ pub mod parser;
 
 use analyzer::{analyze_query, ConversationMessage};
 use cache::PromptCache;
-use compressor::{compress_prompt, CompressionResult};
 pub use compressor::CompressionConfig;
+use compressor::{compress_prompt, CompressionResult};
 use parser::{parse_prompt, ParseError, ParsedPrompt};
 
 /// High-level prompt compression facade.

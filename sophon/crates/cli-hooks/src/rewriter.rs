@@ -42,7 +42,11 @@ pub enum RewriteResult {
     /// Run `cmd` unchanged.
     Passthrough(String),
     /// Run `rewritten` (which wraps `original` in `sophon exec -- …`).
-    Rewritten { original: String, rewritten: String, rule: &'static str },
+    Rewritten {
+        original: String,
+        rewritten: String,
+        rule: &'static str,
+    },
 }
 
 impl RewriteResult {
@@ -115,7 +119,10 @@ impl CommandRewriter {
     /// Build a rewriter with an explicit rule list. Used in tests and
     /// when loading a user-provided TOML config.
     pub fn with_rules(rules: Vec<RewriteRule>) -> Self {
-        Self { rules, exclusions: Vec::new() }
+        Self {
+            rules,
+            exclusions: Vec::new(),
+        }
     }
 
     /// Add a prefix that short-circuits to passthrough (e.g. `curl`).
@@ -210,10 +217,7 @@ mod tests {
         let r = CommandRewriter::new();
         let out = r.rewrite("cargo test --workspace");
         assert!(out.is_rewritten());
-        assert_eq!(
-            out.final_command(),
-            "sophon exec -- cargo test --workspace"
-        );
+        assert_eq!(out.final_command(), "sophon exec -- cargo test --workspace");
     }
 
     #[test]
@@ -277,7 +281,10 @@ mod tests {
     fn exclusion_list_wins() {
         let r = CommandRewriter::new().exclude("git log");
         let out = r.rewrite("git log --oneline");
-        assert!(!out.is_rewritten(), "exclusion should short-circuit rewrite");
+        assert!(
+            !out.is_rewritten(),
+            "exclusion should short-circuit rewrite"
+        );
     }
 
     #[test]

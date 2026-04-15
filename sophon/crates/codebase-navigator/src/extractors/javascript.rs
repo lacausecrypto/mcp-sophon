@@ -127,27 +127,57 @@ impl SymbolExtractor for JavaScriptExtractor {
             let line_no = (idx + 1) as u32;
 
             if let Some(caps) = JS_FN_RE.captures(line) {
-                out.push(Symbol::new(&caps["name"], SymbolKind::Function, line_no, line.trim()));
+                out.push(Symbol::new(
+                    &caps["name"],
+                    SymbolKind::Function,
+                    line_no,
+                    line.trim(),
+                ));
                 continue;
             }
             if let Some(caps) = JS_CLASS_RE.captures(line) {
-                out.push(Symbol::new(&caps["name"], SymbolKind::Class, line_no, line.trim()));
+                out.push(Symbol::new(
+                    &caps["name"],
+                    SymbolKind::Class,
+                    line_no,
+                    line.trim(),
+                ));
                 continue;
             }
             if let Some(caps) = TS_INTERFACE_RE.captures(line) {
-                out.push(Symbol::new(&caps["name"], SymbolKind::Interface, line_no, line.trim()));
+                out.push(Symbol::new(
+                    &caps["name"],
+                    SymbolKind::Interface,
+                    line_no,
+                    line.trim(),
+                ));
                 continue;
             }
             if let Some(caps) = TS_TYPE_RE.captures(line) {
-                out.push(Symbol::new(&caps["name"], SymbolKind::TypeAlias, line_no, line.trim()));
+                out.push(Symbol::new(
+                    &caps["name"],
+                    SymbolKind::TypeAlias,
+                    line_no,
+                    line.trim(),
+                ));
                 continue;
             }
             if let Some(caps) = JS_ARROW_RE.captures(line) {
-                out.push(Symbol::new(&caps["name"], SymbolKind::Function, line_no, line.trim()));
+                out.push(Symbol::new(
+                    &caps["name"],
+                    SymbolKind::Function,
+                    line_no,
+                    line.trim(),
+                ));
                 continue;
             }
             if let Some(caps) = JS_CONST_RE.captures(line) {
-                out.push(Symbol::new(&caps["name"], SymbolKind::Const, line_no, line.trim()));
+                out.push(Symbol::new(
+                    &caps["name"],
+                    SymbolKind::Const,
+                    line_no,
+                    line.trim(),
+                ));
                 continue;
             }
         }
@@ -176,32 +206,45 @@ mod tests {
 
     #[test]
     fn captures_arrow_function_const() {
-        let src = "export const handler = async (req) => { return 42 }\nconst add = (a, b) => a + b\n";
+        let src =
+            "export const handler = async (req) => { return 42 }\nconst add = (a, b) => a + b\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "handler" && s.kind == SymbolKind::Function));
-        assert!(syms.iter().any(|s| s.name == "add" && s.kind == SymbolKind::Function));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "handler" && s.kind == SymbolKind::Function));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "add" && s.kind == SymbolKind::Function));
     }
 
     #[test]
     fn captures_ts_interface_and_type() {
         let src = "export interface Foo { a: number }\nexport type Bar = string | number\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "Foo" && s.kind == SymbolKind::Interface));
-        assert!(syms.iter().any(|s| s.name == "Bar" && s.kind == SymbolKind::TypeAlias));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Foo" && s.kind == SymbolKind::Interface));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Bar" && s.kind == SymbolKind::TypeAlias));
     }
 
     #[test]
     fn captures_class() {
         let src = "export abstract class Widget {\n  render() {}\n}\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "Widget" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Widget" && s.kind == SymbolKind::Class));
     }
 
     #[test]
     fn captures_screaming_const_only() {
         let src = "const NOT_PICKED = 1\nconst MAX_RETRIES = 5\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "MAX_RETRIES" && s.kind == SymbolKind::Const));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "MAX_RETRIES" && s.kind == SymbolKind::Const));
         // NOT_PICKED is screaming snake so it IS picked up. The test
         // just confirms the pattern; lowercase consts are skipped.
         let lowercase_src = "const foo = 1\n";

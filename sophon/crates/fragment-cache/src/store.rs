@@ -83,7 +83,10 @@ impl FragmentStore {
         }
     }
 
-    pub fn new(storage_path: impl AsRef<Path>, max_fragments: usize) -> Result<Self, std::io::Error> {
+    pub fn new(
+        storage_path: impl AsRef<Path>,
+        max_fragments: usize,
+    ) -> Result<Self, std::io::Error> {
         let path = storage_path.as_ref().to_path_buf();
         let mut store = Self {
             fragments: HashMap::new(),

@@ -250,7 +250,8 @@ impl SophonServer {
                             "message": format!("parse error: {}", err)
                         }
                     });
-                    out.write_all(format!("{}\n", serde_json::to_string(&error)?).as_bytes()).await?;
+                    out.write_all(format!("{}\n", serde_json::to_string(&error)?).as_bytes())
+                        .await?;
                     out.flush().await?;
                     continue;
                 }
@@ -304,11 +305,13 @@ impl StatsCollector {
     }
 
     pub fn totals(&self) -> ModuleStats {
-        self.per_module.values().fold(ModuleStats::default(), |mut acc, st| {
-            acc.calls += st.calls;
-            acc.original_tokens += st.original_tokens;
-            acc.compressed_tokens += st.compressed_tokens;
-            acc
-        })
+        self.per_module
+            .values()
+            .fold(ModuleStats::default(), |mut acc, st| {
+                acc.calls += st.calls;
+                acc.original_tokens += st.original_tokens;
+                acc.compressed_tokens += st.compressed_tokens;
+                acc
+            })
     }
 }

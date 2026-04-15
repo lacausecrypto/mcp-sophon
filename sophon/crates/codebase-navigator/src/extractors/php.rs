@@ -91,7 +91,12 @@ impl SymbolExtractor for PhpExtractor {
             }
 
             if let Some(caps) = PHP_NAMESPACE_RE.captures(line) {
-                out.push(Symbol::new(&caps["name"], SymbolKind::Module, line_no, trimmed));
+                out.push(Symbol::new(
+                    &caps["name"],
+                    SymbolKind::Module,
+                    line_no,
+                    trimmed,
+                ));
                 continue;
             }
 
@@ -110,7 +115,12 @@ impl SymbolExtractor for PhpExtractor {
             }
 
             if let Some(caps) = PHP_CONST_RE.captures(line) {
-                out.push(Symbol::new(&caps["name"], SymbolKind::Const, line_no, trimmed));
+                out.push(Symbol::new(
+                    &caps["name"],
+                    SymbolKind::Const,
+                    line_no,
+                    trimmed,
+                ));
                 continue;
             }
 
@@ -140,27 +150,46 @@ mod tests {
     fn captures_class_interface_trait_enum() {
         let src = "<?php\n\nclass User {}\ninterface Repo {}\ntrait Timestamps {}\nenum Status { case Draft; }\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Class));
-        assert!(syms.iter().any(|s| s.name == "Repo" && s.kind == SymbolKind::Interface));
-        assert!(syms.iter().any(|s| s.name == "Timestamps" && s.kind == SymbolKind::Class));
-        assert!(syms.iter().any(|s| s.name == "Status" && s.kind == SymbolKind::Enum));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "User" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Repo" && s.kind == SymbolKind::Interface));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Timestamps" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Status" && s.kind == SymbolKind::Enum));
     }
 
     #[test]
     fn captures_top_level_and_class_methods() {
         let src = "<?php\n\nfunction greet($name) {}\n\nclass Service {\n    public function start() {}\n    private static function internal() {}\n}\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "greet" && s.kind == SymbolKind::Function));
-        assert!(syms.iter().any(|s| s.name == "start" && s.kind == SymbolKind::Method));
-        assert!(syms.iter().any(|s| s.name == "internal" && s.kind == SymbolKind::Method));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "greet" && s.kind == SymbolKind::Function));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "start" && s.kind == SymbolKind::Method));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "internal" && s.kind == SymbolKind::Method));
     }
 
     #[test]
     fn captures_namespace_and_const() {
-        let src = "<?php\n\nnamespace App\\Services;\n\nclass Config {\n    const MAX_RETRIES = 5;\n}\n";
+        let src =
+            "<?php\n\nnamespace App\\Services;\n\nclass Config {\n    const MAX_RETRIES = 5;\n}\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "App\\Services" && s.kind == SymbolKind::Module));
-        assert!(syms.iter().any(|s| s.name == "MAX_RETRIES" && s.kind == SymbolKind::Const));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "App\\Services" && s.kind == SymbolKind::Module));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "MAX_RETRIES" && s.kind == SymbolKind::Const));
     }
 
     #[test]
@@ -176,7 +205,11 @@ mod tests {
     fn abstract_final_modifiers_are_ignored_as_noise() {
         let src = "<?php\n\nabstract class Base {}\nfinal class Widget {}\n";
         let syms = extract(src);
-        assert!(syms.iter().any(|s| s.name == "Base" && s.kind == SymbolKind::Class));
-        assert!(syms.iter().any(|s| s.name == "Widget" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Base" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Widget" && s.kind == SymbolKind::Class));
     }
 }

@@ -26,9 +26,15 @@ mod tests {
         let ext = new();
         let src = "def foo():\n    pass\n\nclass Bar:\n    def baz(self): pass\n";
         let syms = ext.extract(src);
-        assert!(syms.iter().any(|s| s.name == "foo" && s.kind == SymbolKind::Function));
-        assert!(syms.iter().any(|s| s.name == "Bar" && s.kind == SymbolKind::Class));
-        assert!(syms.iter().any(|s| s.name == "baz" && s.kind == SymbolKind::Method));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "foo" && s.kind == SymbolKind::Function));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Bar" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "baz" && s.kind == SymbolKind::Method));
     }
 
     #[test]

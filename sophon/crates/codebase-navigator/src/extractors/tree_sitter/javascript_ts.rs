@@ -28,8 +28,12 @@ mod tests {
         let ext = new();
         let src = "function foo() {}\nclass Bar {}\n";
         let syms = ext.extract(src);
-        assert!(syms.iter().any(|s| s.name == "foo" && s.kind == SymbolKind::Function));
-        assert!(syms.iter().any(|s| s.name == "Bar" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "foo" && s.kind == SymbolKind::Function));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Bar" && s.kind == SymbolKind::Class));
     }
 
     #[test]
@@ -37,8 +41,12 @@ mod tests {
         let ext = new();
         let src = "export const handler = async (req) => { return 42 }\nconst add = (a,b) => a+b\n";
         let syms = ext.extract(src);
-        assert!(syms.iter().any(|s| s.name == "handler" && s.kind == SymbolKind::Function));
-        assert!(syms.iter().any(|s| s.name == "add" && s.kind == SymbolKind::Function));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "handler" && s.kind == SymbolKind::Function));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "add" && s.kind == SymbolKind::Function));
     }
 
     #[test]

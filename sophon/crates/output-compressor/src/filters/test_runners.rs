@@ -13,32 +13,30 @@ pub fn cargo_test_filter() -> FilterConfig {
     FilterConfig {
         name: "cargo_test",
         command_patterns: vec![rx(r"^\s*cargo\s+test")],
-        strategies: vec![
-            CompressionStrategy::FilterLines {
-                remove_patterns: vec![
-                    rx(r"^test .+ \.\.\. ok$"),
-                    rx(r"^test .+ \.\.\. ignored"),
-                    rx(r"^running \d+ tests?$"),
-                    rx(r"^\s*Running "),
-                    rx(r"^\s*Compiling "),
-                    rx(r"^\s*Finished "),
-                    rx(r"^\s*Doc-tests "),
-                    rx(r"^\s*$"),
-                ],
-                keep_patterns: vec![
-                    rx(r"FAILED"),
-                    rx(r"^test .+ \.\.\. FAILED"),
-                    rx(r"^failures:"),
-                    rx(r"^---- .+ ----"),
-                    rx(r"thread .+ panicked"),
-                    rx(r"^test result:"),
-                    rx(r"^error"),
-                    rx(r"^warning"),
-                    rx(r"^note:"),
-                    rx(r"assertion"),
-                ],
-            },
-        ],
+        strategies: vec![CompressionStrategy::FilterLines {
+            remove_patterns: vec![
+                rx(r"^test .+ \.\.\. ok$"),
+                rx(r"^test .+ \.\.\. ignored"),
+                rx(r"^running \d+ tests?$"),
+                rx(r"^\s*Running "),
+                rx(r"^\s*Compiling "),
+                rx(r"^\s*Finished "),
+                rx(r"^\s*Doc-tests "),
+                rx(r"^\s*$"),
+            ],
+            keep_patterns: vec![
+                rx(r"FAILED"),
+                rx(r"^test .+ \.\.\. FAILED"),
+                rx(r"^failures:"),
+                rx(r"^---- .+ ----"),
+                rx(r"thread .+ panicked"),
+                rx(r"^test result:"),
+                rx(r"^error"),
+                rx(r"^warning"),
+                rx(r"^note:"),
+                rx(r"assertion"),
+            ],
+        }],
         max_output_tokens: Some(800),
         preserve_head: 0,
         preserve_tail: 5,
@@ -48,39 +46,34 @@ pub fn cargo_test_filter() -> FilterConfig {
 pub fn pytest_filter() -> FilterConfig {
     FilterConfig {
         name: "pytest",
-        command_patterns: vec![
-            rx(r"^\s*pytest"),
-            rx(r"^\s*python\s+-m\s+pytest"),
-        ],
-        strategies: vec![
-            CompressionStrategy::FilterLines {
-                remove_patterns: vec![
-                    rx(r"^=+ test session starts =+"),
-                    rx(r"^platform "),
-                    rx(r"^plugins:"),
-                    rx(r"^collected \d+ items"),
-                    rx(r"^rootdir:"),
-                    // Pytest prints "tests/foo.py::test_x PASSED [ 20% ]" —
-                    // the PASSED token sits mid-line, not anchored. Match
-                    // anywhere on the line.
-                    rx(r"\bPASSED\b"),
-                    rx(r"^\s*\.+\s*$"),
-                    rx(r"^$"),
-                ],
-                keep_patterns: vec![
-                    // These override the PASSED match above on the summary
-                    // line (which contains both).
-                    rx(r"FAILED"),
-                    rx(r"ERROR"),
-                    rx(r"^E\s+"),
-                    rx(r"^=+ FAILURES =+"),
-                    rx(r"^=+ ERRORS =+"),
-                    rx(r"^=+ short test summary"),
-                    rx(r"^_+ "),
-                    rx(r"AssertionError"),
-                ],
-            },
-        ],
+        command_patterns: vec![rx(r"^\s*pytest"), rx(r"^\s*python\s+-m\s+pytest")],
+        strategies: vec![CompressionStrategy::FilterLines {
+            remove_patterns: vec![
+                rx(r"^=+ test session starts =+"),
+                rx(r"^platform "),
+                rx(r"^plugins:"),
+                rx(r"^collected \d+ items"),
+                rx(r"^rootdir:"),
+                // Pytest prints "tests/foo.py::test_x PASSED [ 20% ]" —
+                // the PASSED token sits mid-line, not anchored. Match
+                // anywhere on the line.
+                rx(r"\bPASSED\b"),
+                rx(r"^\s*\.+\s*$"),
+                rx(r"^$"),
+            ],
+            keep_patterns: vec![
+                // These override the PASSED match above on the summary
+                // line (which contains both).
+                rx(r"FAILED"),
+                rx(r"ERROR"),
+                rx(r"^E\s+"),
+                rx(r"^=+ FAILURES =+"),
+                rx(r"^=+ ERRORS =+"),
+                rx(r"^=+ short test summary"),
+                rx(r"^_+ "),
+                rx(r"AssertionError"),
+            ],
+        }],
         max_output_tokens: Some(800),
         preserve_head: 0,
         preserve_tail: 5,
@@ -95,27 +88,25 @@ pub fn vitest_filter() -> FilterConfig {
             rx(r"^\s*jest"),
             rx(r"^\s*(npm|pnpm|yarn)\s+test"),
         ],
-        strategies: vec![
-            CompressionStrategy::FilterLines {
-                remove_patterns: vec![
-                    rx(r"^✓"),
-                    rx(r"^\s+✓"),
-                    rx(r"^PASS "),
-                    rx(r"^\s*$"),
-                    rx(r"^\s+[\d.]+ms"),
-                ],
-                keep_patterns: vec![
-                    rx(r"^✗"),
-                    rx(r"^×"),
-                    rx(r"^FAIL "),
-                    rx(r"Error:"),
-                    rx(r"Expected"),
-                    rx(r"Received"),
-                    rx(r"Test Files"),
-                    rx(r"Tests\s+\d+"),
-                ],
-            },
-        ],
+        strategies: vec![CompressionStrategy::FilterLines {
+            remove_patterns: vec![
+                rx(r"^✓"),
+                rx(r"^\s+✓"),
+                rx(r"^PASS "),
+                rx(r"^\s*$"),
+                rx(r"^\s+[\d.]+ms"),
+            ],
+            keep_patterns: vec![
+                rx(r"^✗"),
+                rx(r"^×"),
+                rx(r"^FAIL "),
+                rx(r"Error:"),
+                rx(r"Expected"),
+                rx(r"Received"),
+                rx(r"Test Files"),
+                rx(r"Tests\s+\d+"),
+            ],
+        }],
         max_output_tokens: Some(800),
         preserve_head: 0,
         preserve_tail: 5,
@@ -126,25 +117,23 @@ pub fn go_test_filter() -> FilterConfig {
     FilterConfig {
         name: "go_test",
         command_patterns: vec![rx(r"^\s*go\s+test")],
-        strategies: vec![
-            CompressionStrategy::FilterLines {
-                remove_patterns: vec![
-                    rx(r"^ok\s+"),
-                    rx(r"^=== RUN"),
-                    rx(r"^--- PASS:"),
-                    rx(r"^PASS$"),
-                    rx(r"^\s*$"),
-                    rx(r"^\?\s+"),
-                ],
-                keep_patterns: vec![
-                    rx(r"^--- FAIL:"),
-                    rx(r"^FAIL\s+"),
-                    rx(r"^FAIL$"),
-                    rx(r"panic:"),
-                    rx(r"Error"),
-                ],
-            },
-        ],
+        strategies: vec![CompressionStrategy::FilterLines {
+            remove_patterns: vec![
+                rx(r"^ok\s+"),
+                rx(r"^=== RUN"),
+                rx(r"^--- PASS:"),
+                rx(r"^PASS$"),
+                rx(r"^\s*$"),
+                rx(r"^\?\s+"),
+            ],
+            keep_patterns: vec![
+                rx(r"^--- FAIL:"),
+                rx(r"^FAIL\s+"),
+                rx(r"^FAIL$"),
+                rx(r"panic:"),
+                rx(r"Error"),
+            ],
+        }],
         max_output_tokens: Some(800),
         preserve_head: 0,
         preserve_tail: 5,

@@ -47,7 +47,12 @@ impl ScanResult {
     pub fn total_files(&self) -> usize {
         match self {
             Self::Fresh { files, .. } => *files,
-            Self::Incremental { unchanged, updated, added, .. } => unchanged + updated + added,
+            Self::Incremental {
+                unchanged,
+                updated,
+                added,
+                ..
+            } => unchanged + updated + added,
         }
     }
 
@@ -182,7 +187,10 @@ impl Navigator {
                 .first()
                 .map(|r| r.scan_source)
                 .unwrap_or(ScanSource::Walkdir);
-            let result = ScanResult::Fresh { files: records.len(), scan_source };
+            let result = ScanResult::Fresh {
+                files: records.len(),
+                scan_source,
+            };
             self.records = records;
             self.root = Some(root);
             self.last_scan_result = Some(result.clone());
@@ -367,9 +375,7 @@ mod tests {
         // Read current mtime, add 5 s, write back. Falls back to
         // "now" if the file has no mtime for some reason.
         let now = SystemTime::now();
-        let target = now
-            .checked_add(Duration::from_secs(5))
-            .unwrap_or(now);
+        let target = now.checked_add(Duration::from_secs(5)).unwrap_or(now);
         // filetime would be cleaner but avoiding an extra dep.
         // Instead we touch the file by rewriting its content.
         let _ = path; // unused in this fallback implementation
@@ -407,7 +413,11 @@ mod tests {
         let second = nav.scan(dir.path()).unwrap();
         match second {
             ScanResult::Incremental {
-                unchanged, updated, added, removed, ..
+                unchanged,
+                updated,
+                added,
+                removed,
+                ..
             } => {
                 assert_eq!(unchanged, 2);
                 assert_eq!(updated, 0);
@@ -433,7 +443,11 @@ mod tests {
         let second = nav.scan(dir.path()).unwrap();
         match second {
             ScanResult::Incremental {
-                unchanged, added, removed, updated, ..
+                unchanged,
+                added,
+                removed,
+                updated,
+                ..
             } => {
                 assert_eq!(unchanged, 1);
                 assert_eq!(added, 1);
@@ -461,7 +475,11 @@ mod tests {
         let second = nav.scan(dir.path()).unwrap();
         match second {
             ScanResult::Incremental {
-                unchanged, removed, added, updated, ..
+                unchanged,
+                removed,
+                added,
+                updated,
+                ..
             } => {
                 assert_eq!(unchanged, 1);
                 assert_eq!(removed, 1);
@@ -499,7 +517,11 @@ mod tests {
         let second = nav.scan(dir.path()).unwrap();
         match second {
             ScanResult::Incremental {
-                unchanged, updated, added, removed, ..
+                unchanged,
+                updated,
+                added,
+                removed,
+                ..
             } => {
                 assert_eq!(unchanged, 0);
                 assert_eq!(updated, 1);
@@ -532,7 +554,13 @@ mod tests {
             ScanResult::Fresh { files, .. } => assert_eq!(files, 1),
             other => panic!("expected Fresh on new root, got {:?}", other),
         }
-        assert!(nav.records.iter().any(|r| r.relative_path.ends_with("two.rs")));
-        assert!(!nav.records.iter().any(|r| r.relative_path.ends_with("one.rs")));
+        assert!(nav
+            .records
+            .iter()
+            .any(|r| r.relative_path.ends_with("two.rs")));
+        assert!(!nav
+            .records
+            .iter()
+            .any(|r| r.relative_path.ends_with("one.rs")));
     }
 }

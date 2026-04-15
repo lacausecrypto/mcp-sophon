@@ -26,8 +26,12 @@ mod tests {
         let ext = new();
         let src = "pub fn foo(x: i32) -> i32 { x }\n\npub struct Bar;\n";
         let syms = ext.extract(src);
-        assert!(syms.iter().any(|s| s.name == "foo" && s.kind == SymbolKind::Function));
-        assert!(syms.iter().any(|s| s.name == "Bar" && s.kind == SymbolKind::Struct));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "foo" && s.kind == SymbolKind::Function));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Bar" && s.kind == SymbolKind::Struct));
     }
 
     #[test]
@@ -43,12 +47,17 @@ impl Widget {
 ";
         let syms = ext.extract(src);
         assert!(
-            syms.iter().any(|s| s.name == "render" && s.kind == SymbolKind::Method),
+            syms.iter()
+                .any(|s| s.name == "render" && s.kind == SymbolKind::Method),
             "methods not recognised: {:?}",
             syms
         );
-        assert!(syms.iter().any(|s| s.name == "area" && s.kind == SymbolKind::Method));
-        assert!(syms.iter().any(|s| s.name == "Widget" && s.kind == SymbolKind::Struct));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "area" && s.kind == SymbolKind::Method));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Widget" && s.kind == SymbolKind::Struct));
     }
 
     #[test]
@@ -61,7 +70,11 @@ pub fn real() {}
 "#;
         let syms = ext.extract(src);
         assert!(syms.iter().any(|s| s.name == "real"));
-        assert!(!syms.iter().any(|s| s.name == "ghost"), "false positive: {:?}", syms);
+        assert!(
+            !syms.iter().any(|s| s.name == "ghost"),
+            "false positive: {:?}",
+            syms
+        );
         assert!(syms.iter().any(|s| s.name == "GREETING"));
     }
 

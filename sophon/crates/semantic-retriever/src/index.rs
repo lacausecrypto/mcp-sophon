@@ -24,7 +24,12 @@ pub struct VectorIndex {
 
 impl VectorIndex {
     pub fn new(dim: usize) -> Self {
-        Self { ids: Vec::new(), vectors: Vec::new(), id_to_pos: HashMap::new(), dim }
+        Self {
+            ids: Vec::new(),
+            vectors: Vec::new(),
+            id_to_pos: HashMap::new(),
+            dim,
+        }
     }
 
     pub fn dim(&self) -> usize {
@@ -85,7 +90,9 @@ impl VectorIndex {
 
         // Partial sort: select the top-k by descending score.
         let k = k.min(n);
-        scored.select_nth_unstable_by(k - 1, |a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.select_nth_unstable_by(k - 1, |a, b| {
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+        });
         scored.truncate(k);
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
@@ -109,7 +116,11 @@ mod tests {
 
     fn unit(v: Vec<f32>) -> Vec<f32> {
         let n: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if n == 0.0 { v } else { v.into_iter().map(|x| x / n).collect() }
+        if n == 0.0 {
+            v
+        } else {
+            v.into_iter().map(|x| x / n).collect()
+        }
     }
 
     #[test]

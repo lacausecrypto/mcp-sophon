@@ -31,7 +31,11 @@ pub struct MemoryManager {
 
 impl MemoryManager {
     pub fn new(config: MemoryConfig) -> Self {
-        Self { config, history: Vec::new(), persistence_path: None }
+        Self {
+            config,
+            history: Vec::new(),
+            persistence_path: None,
+        }
     }
 
     /// Attach a JSONL persistence path. If the file exists, its contents
@@ -46,7 +50,9 @@ impl MemoryManager {
             let raw = fs::read_to_string(&path)?;
             for line in raw.lines() {
                 let line = line.trim();
-                if line.is_empty() { continue; }
+                if line.is_empty() {
+                    continue;
+                }
                 if let Ok(msg) = serde_json::from_str::<Message>(line) {
                     self.history.push(msg);
                 }
@@ -62,8 +68,13 @@ impl MemoryManager {
 
     fn flush_append(&self, msgs: &[Message]) -> std::io::Result<()> {
         use std::io::Write;
-        let Some(path) = &self.persistence_path else { return Ok(()); };
-        let mut f = fs::OpenOptions::new().create(true).append(true).open(path)?;
+        let Some(path) = &self.persistence_path else {
+            return Ok(());
+        };
+        let mut f = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
         for m in msgs {
             let line = serde_json::to_string(m)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;

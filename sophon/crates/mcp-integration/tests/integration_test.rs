@@ -99,7 +99,9 @@ fn test_mcp_jsonrpc_tools_list_and_call() {
         .and_then(|r| r.get("tools"))
         .and_then(|t| t.as_array())
         .expect("tools array");
-    assert!(tools.iter().any(|t| t.get("name") == Some(&json!("compress_prompt"))));
+    assert!(tools
+        .iter()
+        .any(|t| t.get("name") == Some(&json!("compress_prompt"))));
 
     let call = server
         .handle_json_rpc_message(&json!({

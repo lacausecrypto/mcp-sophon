@@ -40,8 +40,12 @@ mod tests {
         let ext = new_ts();
         let src = "export interface User { name: string }\nexport type Age = number\n";
         let syms = ext.extract(src);
-        assert!(syms.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Interface));
-        assert!(syms.iter().any(|s| s.name == "Age" && s.kind == SymbolKind::TypeAlias));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "User" && s.kind == SymbolKind::Interface));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Age" && s.kind == SymbolKind::TypeAlias));
     }
 
     #[test]
@@ -49,15 +53,22 @@ mod tests {
         let ext = new_ts();
         let src = "export function foo(): void {}\nexport class Widget {}\n";
         let syms = ext.extract(src);
-        assert!(syms.iter().any(|s| s.name == "foo" && s.kind == SymbolKind::Function));
-        assert!(syms.iter().any(|s| s.name == "Widget" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "foo" && s.kind == SymbolKind::Function));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Widget" && s.kind == SymbolKind::Class));
     }
 
     #[test]
     fn tsx_captures_component() {
         let ext = new_tsx();
-        let src = "export const Button = (props: {label: string}) => <button>{props.label}</button>\n";
+        let src =
+            "export const Button = (props: {label: string}) => <button>{props.label}</button>\n";
         let syms = ext.extract(src);
-        assert!(syms.iter().any(|s| s.name == "Button" && s.kind == SymbolKind::Function));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Button" && s.kind == SymbolKind::Function));
     }
 }

@@ -149,7 +149,12 @@ impl Retriever {
                 .map_err(|e| RetrieverError::Index(e.to_string()))?;
         }
 
-        Ok(Self { embedder, index, store, config })
+        Ok(Self {
+            embedder,
+            index,
+            store,
+            config,
+        })
     }
 
     pub fn config(&self) -> &RetrieverConfig {
@@ -215,7 +220,9 @@ impl Retriever {
             if score < self.config.min_score {
                 continue;
             }
-            let Some(chunk) = self.store.get(&id) else { continue; };
+            let Some(chunk) = self.store.get(&id) else {
+                continue;
+            };
 
             if self.config.deduplicate {
                 let h = content_hash8(&chunk.content);
@@ -223,12 +230,16 @@ impl Retriever {
                     continue;
                 }
             }
-            if total_tokens + chunk.token_count > self.config.max_retrieved_tokens && !out.is_empty()
+            if total_tokens + chunk.token_count > self.config.max_retrieved_tokens
+                && !out.is_empty()
             {
                 break;
             }
             total_tokens += chunk.token_count;
-            out.push(ScoredChunk { chunk: RetrievedChunk::from(chunk), score });
+            out.push(ScoredChunk {
+                chunk: RetrievedChunk::from(chunk),
+                score,
+            });
             if out.len() >= self.config.top_k {
                 break;
             }
@@ -301,9 +312,17 @@ mod tests {
         let mut r = Retriever::open(cfg_in(dir.path())).unwrap();
         let msgs = vec![
             msg(0, ChunkInputRole::User, "What's a good Italian restaurant?"),
-            msg(1, ChunkInputRole::Assistant, "Try Chez Luigi on Rue de Passy. Best carbonara in Paris."),
+            msg(
+                1,
+                ChunkInputRole::Assistant,
+                "Try Chez Luigi on Rue de Passy. Best carbonara in Paris.",
+            ),
             msg(2, ChunkInputRole::User, "What about Japanese food?"),
-            msg(3, ChunkInputRole::Assistant, "Kinugawa is excellent for sushi near Place Vendome."),
+            msg(
+                3,
+                ChunkInputRole::Assistant,
+                "Kinugawa is excellent for sushi near Place Vendome.",
+            ),
         ];
         let added = r.index_messages(&msgs).unwrap();
         assert!(added > 0, "expected to index something, got {}", added);
@@ -339,7 +358,11 @@ mod tests {
         let mut r = Retriever::open(cfg_in(dir.path())).unwrap();
         let msgs = vec![
             msg(0, ChunkInputRole::User, "What's a good Italian restaurant?"),
-            msg(1, ChunkInputRole::Assistant, "Try Chez Luigi. Best carbonara in town."),
+            msg(
+                1,
+                ChunkInputRole::Assistant,
+                "Try Chez Luigi. Best carbonara in town.",
+            ),
         ];
         r.index_messages(&msgs).unwrap();
 
@@ -354,7 +377,10 @@ mod tests {
             .first()
             .map(|c| c.chunk.content.to_lowercase().contains("italian"))
             .unwrap_or(false);
-        assert!(top_is_question, "expected question (with shared keyword 'italian') as top match");
+        assert!(
+            top_is_question,
+            "expected question (with shared keyword 'italian') as top match"
+        );
     }
 
     #[test]

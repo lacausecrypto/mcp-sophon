@@ -215,7 +215,9 @@ fn pack_sentences(
             return;
         }
         let content = buf.join(" ");
-        out.push(build_chunk(content, chunk_type, msg_index, timestamp, session_id));
+        out.push(build_chunk(
+            content, chunk_type, msg_index, timestamp, session_id,
+        ));
         buf.clear();
         *buf_tokens = 0;
     };
@@ -228,7 +230,9 @@ fn pack_sentences(
             flush(&mut buf, &mut buf_tokens, &mut out);
             for piece in hard_split(sentence, config.max_size) {
                 let content = piece;
-                out.push(build_chunk(content, chunk_type, msg_index, timestamp, session_id));
+                out.push(build_chunk(
+                    content, chunk_type, msg_index, timestamp, session_id,
+                ));
             }
             continue;
         }
@@ -242,7 +246,14 @@ fn pack_sentences(
     }
     flush(&mut buf, &mut buf_tokens, &mut out);
 
-    apply_overlap(out, config.overlap, chunk_type, msg_index, timestamp, session_id)
+    apply_overlap(
+        out,
+        config.overlap,
+        chunk_type,
+        msg_index,
+        timestamp,
+        session_id,
+    )
 }
 
 fn hard_split(sentence: &str, max_tokens: usize) -> Vec<String> {
@@ -380,20 +391,33 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         let chunks = chunk_messages(&[msg(0, ChunkInputRole::User, &big)], &cfg);
-        assert!(chunks.len() > 1, "expected packing, got {} chunks", chunks.len());
+        assert!(
+            chunks.len() > 1,
+            "expected packing, got {} chunks",
+            chunks.len()
+        );
         for c in &chunks {
-            assert!(c.token_count <= cfg.max_size + 4, "chunk too big: {}", c.token_count);
+            assert!(
+                c.token_count <= cfg.max_size + 4,
+                "chunk too big: {}",
+                c.token_count
+            );
         }
     }
 
     #[test]
     fn code_block_extracted_separately() {
         let cfg = ChunkConfig::default();
-        let body = "Here's a snippet:\n```rust\nfn main() { println!(\"hi\"); }\n```\nThat's the example.";
+        let body =
+            "Here's a snippet:\n```rust\nfn main() { println!(\"hi\"); }\n```\nThat's the example.";
         let chunks = chunk_messages(&[msg(0, ChunkInputRole::Assistant, body)], &cfg);
-        assert!(chunks.iter().any(|c| matches!(c.chunk_type, ChunkType::CodeBlock)));
+        assert!(chunks
+            .iter()
+            .any(|c| matches!(c.chunk_type, ChunkType::CodeBlock)));
         // Prose around the code is also a chunk.
-        assert!(chunks.iter().any(|c| matches!(c.chunk_type, ChunkType::AssistantResponse)));
+        assert!(chunks
+            .iter()
+            .any(|c| matches!(c.chunk_type, ChunkType::AssistantResponse)));
     }
 
     #[test]

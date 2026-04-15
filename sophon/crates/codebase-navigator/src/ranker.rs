@@ -55,7 +55,11 @@ pub struct RankResult {
 pub fn rank_files(records: &[FileRecord], query: Option<&str>) -> RankResult {
     let n = records.len();
     if n == 0 {
-        return RankResult { ranks: vec![], edge_count: 0, query_hits: 0 };
+        return RankResult {
+            ranks: vec![],
+            edge_count: 0,
+            query_hits: 0,
+        };
     }
 
     // ----- 1. Build a symbol-name → file-index inverted index. -----
@@ -171,7 +175,11 @@ pub fn rank_files(records: &[FileRecord], query: Option<&str>) -> RankResult {
         rank = next;
     }
 
-    RankResult { ranks: rank, edge_count, query_hits }
+    RankResult {
+        ranks: rank,
+        edge_count,
+        query_hits,
+    }
 }
 
 #[cfg(test)]
@@ -205,8 +213,16 @@ mod tests {
     #[test]
     fn ranks_sum_to_approximately_one() {
         let recs = vec![
-            file("a.rs", "pub fn foo() {}", vec![("foo", SymbolKind::Function)]),
-            file("b.rs", "pub fn bar() { foo() }", vec![("bar", SymbolKind::Function)]),
+            file(
+                "a.rs",
+                "pub fn foo() {}",
+                vec![("foo", SymbolKind::Function)],
+            ),
+            file(
+                "b.rs",
+                "pub fn bar() { foo() }",
+                vec![("bar", SymbolKind::Function)],
+            ),
         ];
         let r = rank_files(&recs, None);
         let sum: f32 = r.ranks.iter().sum();
@@ -217,10 +233,26 @@ mod tests {
     fn referenced_file_ranks_higher() {
         // lib.rs defines `helper`; three other files call it.
         let recs = vec![
-            file("lib.rs", "pub fn helper() {}", vec![("helper", SymbolKind::Function)]),
-            file("a.rs", "pub fn a() { helper() }", vec![("a", SymbolKind::Function)]),
-            file("b.rs", "pub fn b() { helper() }", vec![("b", SymbolKind::Function)]),
-            file("c.rs", "pub fn c() { helper() }", vec![("c", SymbolKind::Function)]),
+            file(
+                "lib.rs",
+                "pub fn helper() {}",
+                vec![("helper", SymbolKind::Function)],
+            ),
+            file(
+                "a.rs",
+                "pub fn a() { helper() }",
+                vec![("a", SymbolKind::Function)],
+            ),
+            file(
+                "b.rs",
+                "pub fn b() { helper() }",
+                vec![("b", SymbolKind::Function)],
+            ),
+            file(
+                "c.rs",
+                "pub fn c() { helper() }",
+                vec![("c", SymbolKind::Function)],
+            ),
         ];
         let r = rank_files(&recs, None);
         // lib.rs should be the highest-ranked file.
@@ -238,9 +270,21 @@ mod tests {
     #[test]
     fn query_personalisation_biases_matching_files() {
         let recs = vec![
-            file("auth_login.rs", "pub fn login() {}", vec![("login", SymbolKind::Function)]),
-            file("auth_logout.rs", "pub fn logout() {}", vec![("logout", SymbolKind::Function)]),
-            file("random.rs", "pub fn unrelated() {}", vec![("unrelated", SymbolKind::Function)]),
+            file(
+                "auth_login.rs",
+                "pub fn login() {}",
+                vec![("login", SymbolKind::Function)],
+            ),
+            file(
+                "auth_logout.rs",
+                "pub fn logout() {}",
+                vec![("logout", SymbolKind::Function)],
+            ),
+            file(
+                "random.rs",
+                "pub fn unrelated() {}",
+                vec![("unrelated", SymbolKind::Function)],
+            ),
         ];
         let without_query = rank_files(&recs, None);
         let with_query = rank_files(&recs, Some("how does login work"));

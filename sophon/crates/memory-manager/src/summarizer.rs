@@ -133,7 +133,13 @@ pub fn heuristic_summarize(messages: &[Message]) -> String {
     let mut out = String::new();
     if !user_questions.is_empty() {
         out.push_str("User asked about: ");
-        out.push_str(&user_questions.into_iter().take(6).collect::<Vec<_>>().join("; "));
+        out.push_str(
+            &user_questions
+                .into_iter()
+                .take(6)
+                .collect::<Vec<_>>()
+                .join("; "),
+        );
         out.push_str(". ");
     }
 
@@ -150,7 +156,10 @@ pub fn heuristic_summarize(messages: &[Message]) -> String {
     }
 
     if code_mentions > 0 {
-        out.push_str(&format!("Conversation included {} code-oriented message(s).", code_mentions));
+        out.push_str(&format!(
+            "Conversation included {} code-oriented message(s).",
+            code_mentions
+        ));
     }
 
     if out.trim().is_empty() {

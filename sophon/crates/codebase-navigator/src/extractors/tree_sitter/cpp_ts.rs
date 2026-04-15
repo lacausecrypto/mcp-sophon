@@ -16,7 +16,9 @@ const QUERY: &str = include_str!("queries/cpp.scm");
 pub fn new() -> impl SymbolExtractor {
     TreeSitterBackend::new(
         "c/c++ (ts)",
-        &["c", "h", "cc", "cpp", "cxx", "hpp", "hh", "hxx", "c++", "h++"],
+        &[
+            "c", "h", "cc", "cpp", "cxx", "hpp", "hh", "hxx", "c++", "h++",
+        ],
         tree_sitter_cpp::LANGUAGE.into(),
         QUERY,
     )
@@ -37,8 +39,12 @@ static int add(int a, int b) { return a + b; }
 struct Point { int x; int y; };
 ";
         let syms = ext.extract(src);
-        assert!(syms.iter().any(|s| s.name == "add" && s.kind == SymbolKind::Function));
-        assert!(syms.iter().any(|s| s.name == "Point" && s.kind == SymbolKind::Struct));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "add" && s.kind == SymbolKind::Function));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Point" && s.kind == SymbolKind::Struct));
     }
 
     #[test]
@@ -46,8 +52,12 @@ struct Point { int x; int y; };
         let ext = new();
         let src = "namespace foo { class Widget { public: void render(); }; }";
         let syms = ext.extract(src);
-        assert!(syms.iter().any(|s| s.name == "foo" && s.kind == SymbolKind::Module));
-        assert!(syms.iter().any(|s| s.name == "Widget" && s.kind == SymbolKind::Class));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "foo" && s.kind == SymbolKind::Module));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Widget" && s.kind == SymbolKind::Class));
     }
 
     #[test]
@@ -64,7 +74,11 @@ struct Point { int x; int y; };
         let ext = new();
         let src = "enum class Color { Red, Green }; using Callback = void (*)(int);";
         let syms = ext.extract(src);
-        assert!(syms.iter().any(|s| s.name == "Color" && s.kind == SymbolKind::Enum));
-        assert!(syms.iter().any(|s| s.name == "Callback" && s.kind == SymbolKind::TypeAlias));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Color" && s.kind == SymbolKind::Enum));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Callback" && s.kind == SymbolKind::TypeAlias));
     }
 }

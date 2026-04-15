@@ -5,8 +5,8 @@ pub mod stats;
 pub mod store;
 
 use decoder::decode_content;
-use encoder::{encode_content, EncodedContent};
 pub use encoder::EncoderConfig;
+use encoder::{encode_content, EncodedContent};
 use store::FragmentStore;
 
 #[derive(Debug)]

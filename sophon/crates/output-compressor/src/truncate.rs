@@ -87,7 +87,10 @@ mod tests {
 
     #[test]
     fn middle_truncate_long_input_keeps_head_and_tail() {
-        let input = (1..=20).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
+        let input = (1..=20)
+            .map(|i| format!("line {}", i))
+            .collect::<Vec<_>>()
+            .join("\n");
         let out = middle_truncate_lines(&input, 4, "... {n} skipped ...");
         assert!(out.contains("line 1"));
         assert!(out.contains("line 2"));

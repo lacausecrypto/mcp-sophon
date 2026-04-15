@@ -37,11 +37,7 @@ use crate::types::{Symbol, SymbolKind};
 ///
 /// Returns an empty vec on parser failure (malformed source, internal
 /// error) — the caller should fall back to the regex extractor.
-pub fn extract_with_query(
-    source: &str,
-    language: Language,
-    query_text: &str,
-) -> Vec<Symbol> {
+pub fn extract_with_query(source: &str, language: Language, query_text: &str) -> Vec<Symbol> {
     let mut parser = Parser::new();
     if parser.set_language(&language).is_err() {
         return Vec::new();
@@ -133,7 +129,12 @@ impl TreeSitterBackend {
         language: Language,
         query_text: &'static str,
     ) -> Self {
-        Self { language_name, extensions, language, query_text }
+        Self {
+            language_name,
+            extensions,
+            language,
+            query_text,
+        }
     }
 }
 

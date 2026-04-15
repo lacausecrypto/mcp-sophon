@@ -30,11 +30,10 @@ pub enum ParseError {
     EmptyPrompt,
 }
 
-static XML_SECTION_RE: Lazy<Regex> =
-    Lazy::new(|| {
-        Regex::new(r"<([a-zA-Z][a-zA-Z0-9_-]*)>([^<]*)</([a-zA-Z][a-zA-Z0-9_-]*)>")
-            .expect("valid XML regex")
-    });
+static XML_SECTION_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"<([a-zA-Z][a-zA-Z0-9_-]*)>([^<]*)</([a-zA-Z][a-zA-Z0-9_-]*)>")
+        .expect("valid XML regex")
+});
 static MARKDOWN_HEADER_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?m)^##+\s+(.+)$").expect("valid markdown regex"));
 static NUMBERED_RE: Lazy<Regex> =
@@ -284,7 +283,14 @@ pub fn extract_section_topics(content: &str) -> Vec<String> {
         HashMap::from([
             (
                 "coding",
-                vec!["code", "function", "class", "variable", "syntax", "programming"],
+                vec![
+                    "code",
+                    "function",
+                    "class",
+                    "variable",
+                    "syntax",
+                    "programming",
+                ],
             ),
             (
                 "safety",
@@ -310,10 +316,7 @@ pub fn extract_section_topics(content: &str) -> Vec<String> {
                 "conversation",
                 vec!["tone", "friendly", "conversation", "personality", "style"],
             ),
-            (
-                "python",
-                vec!["python", "pandas", "numpy", "py"],
-            ),
+            ("python", vec!["python", "pandas", "numpy", "py"]),
             (
                 "javascript",
                 vec!["javascript", "typescript", "node", "react"],
