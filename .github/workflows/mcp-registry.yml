@@ -39,4 +39,20 @@ jobs:
         run: mcp-publisher login github-oidc
 
       - name: Publish server.json
-        run: mcp-publisher publish
+        run: |
+          set +e
+          output=$(mcp-publisher publish 2>&1)
+          exit_code=$?
+          echo "$output"
+          if [ $exit_code -eq 0 ]; then
+            echo "::notice::Published successfully"
+            exit 0
+          fi
+          # Tolerate the "already published" case — it means a manual
+          # publish (or an earlier run on the same tag) already registered
+          # this version, which is the desired end-state.
+          if echo "$output" | grep -qi "duplicate version"; then
+            echo "::notice::Version already published to MCP registry — treating as success"
+            exit 0
+          fi
+          exit $exit_code
