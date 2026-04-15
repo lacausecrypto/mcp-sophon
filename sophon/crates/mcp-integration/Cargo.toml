@@ -1,0 +1,28 @@
+[package]
+name = "mcp-integration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "sophon"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+toml.workspace = true
+
+prompt-compressor = { path = "../prompt-compressor" }
+memory-manager = { path = "../memory-manager" }
+delta-streamer = { path = "../delta-streamer" }
+fragment-cache = { path = "../fragment-cache" }
+semantic-retriever = { path = "../semantic-retriever" }
+output-compressor = { path = "../output-compressor" }
+cli-hooks = { path = "../cli-hooks" }
+codebase-navigator = { path = "../codebase-navigator" }
+sophon-core = { path = "../sophon-core" }

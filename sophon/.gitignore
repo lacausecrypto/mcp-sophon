@@ -1,0 +1,6 @@
+target/
+.DS_Store
+*.log
+*.tmp
+*.swp
+/fragments-store.json

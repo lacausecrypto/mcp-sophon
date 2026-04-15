@@ -1,0 +1,34 @@
+[package]
+name = "semantic-retriever"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+once_cell.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+sophon-core = { path = "../sophon-core" }
+
+# Opt-in BERT backend for semantic embeddings.
+# The default build ships only the deterministic HashEmbedder, so the binary
+# stays small (~10 MB) and works in CI / air-gapped environments. Build with
+# `cargo build --features "semantic-retriever/bert"` to pull candle.
+candle-core = { version = "0.7", optional = true }
+candle-nn = { version = "0.7", optional = true }
+candle-transformers = { version = "0.7", optional = true }
+hf-hub = { version = "0.3", optional = true }
+tokenizers = { version = "0.20", optional = true, default-features = false, features = ["onig"] }
+
+[features]
+default = []
+bert = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:hf-hub", "dep:tokenizers"]
+
+[dev-dependencies]
+tempfile = "3"

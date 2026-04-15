@@ -1,0 +1,23 @@
+[general]
+max_output_tokens = 4000
+debug = false
+
+[prompt_compressor]
+default_max_tokens = 2000
+[prompt_compressor.topic_mappings]
+rust = ["code_formatting", "rust_specific", "error_handling"]
+web = ["code_formatting", "javascript", "html_css", "web_apis"]
+
+[memory_manager]
+max_tokens = 2000
+recent_window = 5
+compression_threshold = 10
+
+[delta_streamer]
+max_tracked_files = 100
+hash_algorithm = "sha256"
+
+[fragment_cache]
+max_fragments = 1000
+min_fragment_tokens = 50
+storage_path = "~/.sophon/fragments-store.json"

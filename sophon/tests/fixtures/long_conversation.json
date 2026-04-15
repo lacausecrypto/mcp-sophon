@@ -1,0 +1,10 @@
+[
+  {"role":"user","content":"Hi, my name is Alice and I'm building a productivity app."},
+  {"role":"assistant","content":"Great, what stack are you considering?"},
+  {"role":"user","content":"I'm using Rust for backend and React for frontend."},
+  {"role":"assistant","content":"Good split. Let's define your API contracts first."},
+  {"role":"user","content":"Please always keep responses short unless I ask for detail."},
+  {"role":"assistant","content":"Understood. I'll default to concise mode."},
+  {"role":"user","content":"Now design a table schema for tasks and projects."},
+  {"role":"assistant","content":"Use tasks(id, title, status, project_id, due_at) and projects(id, name)."}
+]

@@ -1,0 +1,23 @@
+[package]
+name = "memory-manager"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+chrono.workspace = true
+once_cell.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+sophon-core = { path = "../sophon-core" }
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "compress_history_bench"
+harness = false

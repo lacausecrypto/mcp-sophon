@@ -1,0 +1,65 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.lacausecrypto/sophon",
+  "title": "Sophon",
+  "description": "Honest token economics for MCP agents. Deterministic context layer in a single Rust binary: prompt compression, conversation memory, code navigation (11 AST languages), file delta streaming, output compression. Zero ML at runtime, cl100k_base accounting. Measured ~67% session token savings, ties mem0 on LOCOMO at sub-second vs 8.7 min, beats LLMLingua-2 on structured prompts by ~10pts at ~35x lower latency. Every number reproducible from BENCHMARK.md.",
+  "version": "0.1.0",
+  "repository": {
+    "url": "https://github.com/lacausecrypto/mcp-sophon",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/lacausecrypto/mcp-sophon#readme",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "mcp-sophon",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtimeArguments": [
+        {
+          "type": "positional",
+          "value": "serve",
+          "description": "Start the Sophon MCP stdio server."
+        }
+      ]
+    }
+  ],
+  "_meta": {
+    "io.github.lacausecrypto/sophon": {
+      "license": "MIT",
+      "language": "rust",
+      "tools": [
+        "compress_prompt",
+        "compress_history",
+        "compress_output",
+        "navigate_codebase",
+        "update_memory",
+        "read_file_delta",
+        "write_file_delta",
+        "encode_fragments",
+        "decode_fragments",
+        "count_tokens",
+        "get_token_stats"
+      ],
+      "optionalFeatures": {
+        "semanticRetriever": "Activated via SOPHON_RETRIEVER_PATH env var. Adds query-time retrieval to compress_history and drives the +13-point LOCOMO open-ended gain measured at N=60. Deterministic HashEmbedder (no ML at runtime). See BENCHMARK.md § 3.7.",
+        "treeSitter": "Activated via cargo feature codebase-navigator/tree-sitter. Swaps the regex extractors for AST-accurate parsing across 11 languages (Rust, Python, JS, TS, TSX, Go, Ruby, Java, C/C++, PHP, Kotlin, Swift). +8 MB in the binary, parallelised via rayon. See BENCHMARK.md § 7.8.a."
+      },
+      "tokenizer": "cl100k_base",
+      "benchmarks": {
+        "session_total_token_savings_pct": 67.0,
+        "cross_model_total_token_savings_pct": 64.5,
+        "locomo_open_ended_retrieval_gain_pts_n60": 13,
+        "vs_llmlingua2_pts_better_on_structured_prompts": 8.9,
+        "vs_llmlingua2_latency_speedup_x": 35,
+        "vs_mem0_lite_locomo_accuracy_tie_pct": 60.0,
+        "vs_mem0_lite_latency_ratio_sophon_over_mem0": "sub-second vs 8.7 min",
+        "compression_overhead_ms_per_call": 6
+      },
+      "benchmarksUrl": "https://github.com/lacausecrypto/mcp-sophon/blob/main/BENCHMARK.md"
+    }
+  }
+}

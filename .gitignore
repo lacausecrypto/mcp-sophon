@@ -1,0 +1,45 @@
+# Rust
+target/
+**/target/
+Cargo.lock.bak
+*.rs.bk
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# npm wrapper — downloaded binaries
+npm/vendor/
+npm/bin/sophon
+npm/bin/sophon.exe
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Local state
+*.log
+*.tmp
+/fragments-store.json
+~/.sophon/
+
+# Editor
+.vscode/
+.idea/
+*.iml
+
+# Claude Code local state — never commit
+.claude/
+CLAUDE.md
+
+# Benchmark artifacts (large + regenerated, user-provided)
+/tmp/sophon_bench/
+benchmarks/data/
+benchmarks/*.json
+!benchmarks/*.py
+!benchmarks/*.md
