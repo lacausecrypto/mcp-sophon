@@ -113,6 +113,10 @@ jobs:
     name: publish npm wrapper
     needs: publish_release
     runs-on: ubuntu-latest
+    # Only attempt the npm publish when NPM_TOKEN is configured. A maintainer
+    # who publishes manually from their own machine can leave the secret
+    # unset and this job will cleanly skip instead of showing red.
+    if: ${{ github.repository_owner != '' }}
     defaults:
       run:
         working-directory: npm
@@ -122,11 +126,35 @@ jobs:
         with:
           node-version: 20
           registry-url: 'https://registry.npmjs.org'
+      - name: Check NPM_TOKEN availability
+        id: have_token
+        run: |
+          if [ -z "${{ secrets.NPM_TOKEN }}" ]; then
+            echo "have=false" >> $GITHUB_OUTPUT
+            echo "::notice::NPM_TOKEN secret is not configured — skipping npm publish (publish manually with 'npm publish --access public')."
+          else
+            echo "have=true" >> $GITHUB_OUTPUT
+          fi
       - name: Sync npm package version with tag
+        if: steps.have_token.outputs.have == 'true'
         run: |
           tag="${GITHUB_REF_NAME#v}"
           node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('package.json')); p.version='${tag}'; fs.writeFileSync('package.json', JSON.stringify(p,null,2));"
       - name: npm publish
-        run: npm publish --access public
+        if: steps.have_token.outputs.have == 'true'
+        run: |
+          set +e
+          output=$(npm publish --access public 2>&1)
+          exit_code=$?
+          echo "$output"
+          if [ $exit_code -eq 0 ]; then
+            exit 0
+          fi
+          # Tolerate the "already published" case so reruns don't go red.
+          if echo "$output" | grep -qi "cannot publish over the previously published versions"; then
+            echo "::notice::Version already on npm — treating as success"
+            exit 0
+          fi
+          exit $exit_code
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
