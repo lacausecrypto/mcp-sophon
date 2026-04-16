@@ -45,19 +45,18 @@ source of truth for everything Sophon claims.
   prompts: Sophon saves **77.3 % in 63 ms**, LLMLingua-2 saves 68.4 %
   in 2 176 ms — **~10 points more saved and ~35× faster**
   ([BENCHMARK.md § 7.8.d](./BENCHMARK.md#78d-head-to-head-sophon-compress_prompt-vs-llmlingua-2))
-- **vs mem0-lite on LOCOMO** (same 15 items, same judge, same rubric):
+- **vs mem0-lite on LOCOMO** (N=15, same judge, same rubric):
   Sophon **60.0 %** accuracy ≈ mem0-lite **60.0 %** — **tie on
   accuracy, Sophon runs sub-second vs 8.7 minutes and zero LLM calls
   vs ~330**
   ([BENCHMARK.md § 7.8.e](./BENCHMARK.md#78e-mem0-lite-on-locomo--same-item-comparison))
-- **v0.2.1 adaptive window** — **+6.6 pts** on LOCOMO compression-only
-  (26.7 % → 33.3 %), **+6.7 pts** on retrieval (53.3 % → 60.0 %), from
-  a single formula change: `recent_window = max(5, log₂(n_messages))`
-  ([BENCHMARK.md § 7.10](./BENCHMARK.md#710-v021-all-conditions-rerun-adaptive-window-overlap-fix-5-new-output-filters))
-- **LOCOMO semantic retriever gain**: enabling the opt-in retriever
-  adds **+27 accuracy points** over compression alone on the same
-  N=15 items (33.3 % COMP → 60.0 % RETR, v0.2.1 numbers)
-  ([BENCHMARK.md § 7.10](./BENCHMARK.md#710-v021-all-conditions-rerun-adaptive-window-overlap-fix-5-new-output-filters))
+- **LOCOMO retrieval at scale** — on N=15 items: retriever reaches
+  **60.0 %** (FULL ceiling 73.3 %). On N=40 items (harder sample):
+  retriever at **42.5 %** (FULL ceiling 75.0 %). Both measured with
+  the same binary, judge, and seed — the gap reflects item difficulty,
+  not a regression
+  ([N=15 § 7.10](./BENCHMARK.md#710-v021-all-conditions-rerun-adaptive-window-overlap-fix-5-new-output-filters),
+  [N=40 § 7.11](./BENCHMARK.md#711-n40-scale-up--harder-items-more-honest-numbers))
 
 Every head-to-head above runs on the same machine, same tokenizer
 (`tiktoken cl100k_base`), same LLM judge, and same inputs. The
@@ -87,13 +86,16 @@ losses as loudly as our wins:
   integration. Sophon's `navigate_codebase` is a faithful Rust
   re-implementation, not a reinvention.
   ([BENCHMARK.md § 7.6](./BENCHMARK.md#76-tree-sitter-vs-regex-backend-on-the-same-5-repos))
-- **Public corrections** — [BENCHMARK.md § 3.7](./BENCHMARK.md#37-locomo-open-ended-retrieval-n60)
-  documents the jump from an optimistic N=30 headline (+23 pts) to
-  the honest N=60 number (+13 pts) after we caught the sample bias
-  ourselves. The git log shows the correction was pushed publicly.
+- **Public corrections** — we've caught and published our own
+  optimistic biases twice:
+  - N=30 → N=60 correction reduced the retrieval headline from
+    +23 pts to +13 pts ([§ 3.7](./BENCHMARK.md#37-locomo-open-ended-retrieval-n60))
+  - N=15 → N=40 scale-up reduced RETR_HASH from 60 % to 42.5 %
+    and showed BGE underperforming Hash on harder items
+    ([§ 7.11](./BENCHMARK.md#711-n40-scale-up--harder-items-more-honest-numbers))
 
-If any benchmark here looks too clean, open an issue — we've already
-caught and published one regression on ourselves.
+If any benchmark here looks too clean, open an issue — we publish
+our corrections in the same doc as our wins.
 
 ---
 
