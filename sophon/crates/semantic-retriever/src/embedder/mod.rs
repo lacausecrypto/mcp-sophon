@@ -11,6 +11,11 @@ pub mod bert;
 #[cfg(feature = "bert")]
 pub use bert::BertEmbedder;
 
+#[cfg(feature = "bge")]
+pub mod bge;
+#[cfg(feature = "bge")]
+pub use bge::BgeEmbedder;
+
 /// Errors emitted by [`Embedder`] implementations.
 #[derive(Debug, thiserror::Error)]
 pub enum EmbedderError {

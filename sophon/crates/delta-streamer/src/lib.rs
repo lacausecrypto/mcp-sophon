@@ -36,7 +36,7 @@ impl DeltaStreamer {
     ) -> Result<FileReadResponse, SophonError> {
         let path_buf = path.as_ref().to_path_buf();
         if !path_buf.exists() {
-            return Err(SophonError::FileNotFound(path_buf));
+            return Err(SophonError::file_not_found(path_buf));
         }
 
         let content = fs::read_to_string(&path_buf)?;
@@ -166,16 +166,16 @@ impl DeltaStreamer {
                 operations,
             } => {
                 if base_version != current_version {
-                    return Err(SophonError::VersionMismatch {
-                        expected: current_version,
-                        actual: base_version,
-                    });
+                    return Err(SophonError::version_mismatch(
+                        current_version,
+                        base_version,
+                    ));
                 }
                 apply_diff(&existing_content, &operations)
-                    .map_err(|e| SophonError::ParseError(e.to_string()))?
+                    .map_err(|e| SophonError::parse(e.to_string()))?
             }
             FileChanges::Structured { edits } => apply_structured_edits(&existing_content, &edits)
-                .map_err(|e| SophonError::InvalidAnchor(e.to_string()))?,
+                .map_err(|e| SophonError::parse(e.to_string()))?,
         };
 
         if let Some(parent) = path.parent() {
@@ -216,7 +216,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), SophonError> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let file_name = path
         .file_name()
-        .ok_or_else(|| SophonError::ParseError("path has no file name".into()))?
+        .ok_or_else(|| SophonError::parse("path has no file name".to_string()))?
         .to_string_lossy();
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

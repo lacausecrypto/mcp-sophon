@@ -37,6 +37,21 @@ Thumbs.db
 .claude/
 CLAUDE.md
 
+# Python virtual environments + build artifacts
+.venv/
+**/.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+*.so
+*.pyd
+*.dll
+sophon-py/target/
+
+# ML model caches (downloaded on first use)
+.fastembed_cache/
+**/.fastembed_cache/
+
 # Benchmark artifacts (large + regenerated, user-provided)
 /tmp/sophon_bench/
 benchmarks/data/

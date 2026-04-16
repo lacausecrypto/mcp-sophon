@@ -26,6 +26,7 @@ pub mod java;
 pub mod javascript;
 pub mod kotlin;
 pub mod php;
+pub mod plugin;
 pub mod python;
 pub mod ruby;
 pub mod rust;
@@ -217,6 +218,34 @@ impl ExtractorRegistry {
 
     pub fn is_empty(&self) -> bool {
         self.extractors.is_empty()
+    }
+
+    /// Scan `dir` for `.toml` plugin files, load each as a
+    /// [`plugin::PluginExtractor`], and register it. Returns the list
+    /// of language names that were successfully loaded (skips files
+    /// that fail to parse with a warning on stderr).
+    pub fn load_plugins(&mut self, dir: &Path) -> Vec<String> {
+        let mut loaded = Vec::new();
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return loaded,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+                continue;
+            }
+            match plugin::PluginExtractor::from_file(&path) {
+                Ok(ext) => {
+                    loaded.push(ext.language().to_string());
+                    self.extractors.push(Box::new(ext));
+                }
+                Err(e) => {
+                    eprintln!("warning: failed to load plugin {:?}: {}", path, e);
+                }
+            }
+        }
+        loaded
     }
 }
 

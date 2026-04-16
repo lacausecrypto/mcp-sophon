@@ -9,7 +9,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Rust 1.75+](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
 [![MCP](https://img.shields.io/badge/MCP-2024--11--05-purple.svg)](https://modelcontextprotocol.io)
-[![Tests](https://img.shields.io/badge/tests-209%20passing-brightgreen.svg)](./BENCHMARK.md)
+[![Tests](https://img.shields.io/badge/tests-194%20Rust%20%2B%204%20Python-brightgreen.svg)](./BENCHMARK.md)
 
 Sophon is a deterministic context layer for agents speaking the Model
 Context Protocol. It compresses prompts, conversation memory, code
@@ -50,6 +50,10 @@ source of truth for everything Sophon claims.
   accuracy, Sophon runs sub-second vs 8.7 minutes and zero LLM calls
   vs ~330**
   ([BENCHMARK.md § 7.8.e](./BENCHMARK.md#78e-mem0-lite-on-locomo--same-item-comparison))
+- **BGE-small semantic embedder** (v0.2, `--features bge`): **+6.7 pts**
+  over HashEmbedder on LOCOMO, **+66.7 pts on single-hop** queries where
+  semantic understanding matters most — zero LLM calls, sub-second
+  ([BENCHMARK.md § 7.9](./BENCHMARK.md#79-bge-small-embedder-vs-hashembedder-on-locomo-v02-upgrade))
 - **LOCOMO semantic retriever gain**: enabling the opt-in retriever
   adds **+13 accuracy points** over compression alone on open-ended
   questions at N=60
@@ -71,11 +75,12 @@ losses as loudly as our wins:
   unstructured document. Sophon's `compress_prompt` shines on
   *structured* prompts with a query, not on arbitrary prose.
   ([BENCHMARK.md § 7.8.d](./BENCHMARK.md#78d-head-to-head-sophon-compress_prompt-vs-llmlingua-2))
-- **Learned semantic retrieval** — Sophon ships a deterministic
-  `HashEmbedder`. For anything resembling MTEB-grade retrieval you
-  want `fastembed-rs` + BGE-small or a proper vector DB. The
-  `BertEmbedder` slot exists in the code but is explicitly a stub.
-  ([BENCHMARK.md § 6.6](./BENCHMARK.md#66-honest-limitations))
+- **Semantic retrieval** — v0.2 adds a real BGE-small embedder
+  (`--features bge`, 384-dim, ONNX) that gains +6.7 pts over the
+  deterministic `HashEmbedder` on LOCOMO. That's real but modest —
+  dedicated vector DBs (Qdrant, LanceDB) with HNSW indexing will
+  outperform Sophon's linear-scan k-NN on large corpora (>50k chunks).
+  ([BENCHMARK.md § 7.9](./BENCHMARK.md#79-bge-small-embedder-vs-hashembedder-on-locomo-v02-upgrade))
 - **Code navigation maturity** — [Aider's repomap](https://aider.chat/docs/repomap.html)
   pioneered the tree-sitter + PageRank approach Sophon uses and
   remains more mature, covering more languages in production
@@ -94,8 +99,9 @@ caught and published one regression on ourselves.
 
 ## What's in the binary
 
-Single Rust binary (**7.2 MB** default, **25 MB** with tree-sitter),
-MCP stdio server, JSON-RPC 2024-11-05, eleven tools:
+Single Rust binary (**7.2 MB** default, **25 MB** with tree-sitter,
+**34 MB** with BGE embedder), MCP stdio server, JSON-RPC 2024-11-05,
+eleven tools:
 
 | Tool | What it compresses / why |
 |---|---|
@@ -187,6 +193,13 @@ cargo build --release -p mcp-integration
 
 # opt into 11-language AST extraction (~25 MB):
 cargo build --release -p mcp-integration --features codebase-navigator/tree-sitter
+
+# opt into BGE-small semantic embedder (~34 MB):
+cargo build --release -p mcp-integration --features bge
+# activate at runtime: SOPHON_EMBEDDER=bge SOPHON_RETRIEVER_PATH=~/.sophon/retriever
+
+# all features (~42 MB):
+cargo build --release -p mcp-integration --features "codebase-navigator/tree-sitter,bge"
 ```
 
 Requires Rust 1.75+.
@@ -255,7 +268,8 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"compress_p
         ├── memory-manager/       compress_history, update_memory, persistence
         ├── delta-streamer/       read_file_delta, write_file_delta
         ├── fragment-cache/       encode_fragments, decode_fragments
-        ├── semantic-retriever/   chunker + HashEmbedder + linear k-NN + JSONL store
+        ├── semantic-retriever/   chunker + HashEmbedder/BGE-small + linear k-NN
+        ├── sophon-storage/       SQLite persistence (WAL, embeddings cache)
         ├── output-compressor/    command-aware stdout/stderr compression
         ├── cli-hooks/            transparent command rewriter + agent installer
         ├── codebase-navigator/   tree-sitter/regex extractors + PageRank + digest
@@ -274,9 +288,10 @@ Environment variables:
 - `SOPHON_RETRIEVER_PATH` — directory for the semantic retriever store
   (e.g. `~/.sophon/retriever`). When set, `compress_history` accepts
   an optional `query` parameter and returns top-k retrieved chunks
-  alongside the compressed summary. This is the code path that drives
-  the +13-pt LOCOMO retrieval gain in
-  [BENCHMARK.md § 3.7](./BENCHMARK.md#37-locomo-open-ended-retrieval-n60).
+  alongside the compressed summary (+13-pt LOCOMO gain, § 3.7).
+- `SOPHON_EMBEDDER` — `hash` (default) or `bge` (requires `--features
+  bge` build). BGE-small adds +6.7 pts on LOCOMO over HashEmbedder
+  ([§ 7.9](./BENCHMARK.md#79-bge-small-embedder-vs-hashembedder-on-locomo-v02-upgrade)).
 - `SOPHON_FRAGMENT_MAX_WINDOW` — override the fragment detector
   window size.
 - `SOPHON_CONFIG` — path to a `sophon.toml` config file.
@@ -298,9 +313,11 @@ Every limitation is documented and measured in
   path — it's a join + keyword index + recent window. Good from ~20
   messages up; short histories are passed through unchanged so the
   payload never *grows*.
-- **`HashEmbedder` is deterministic, not semantic.** Good enough for
-  the LOCOMO retrieval gain measured in § 3.7, not a replacement for
-  BGE-M3 / nomic-embed on MTEB-grade semantic retrieval.
+- **Embedder options**: `HashEmbedder` (default) is deterministic but
+  keyword-only. `BGE-small` (`--features bge`) adds real semantic
+  understanding (+6.7 pts on LOCOMO) but needs a 33 MB ONNX model
+  download on first use and adds 27 MB to the binary. Neither matches
+  dedicated vector DBs with HNSW on large corpora (>50k chunks).
 - **11 AST languages, not every language.** Enabling tree-sitter is
   opt-in (`--features codebase-navigator/tree-sitter`) to keep the
   default build free of C compilation. Languages outside the 11
@@ -314,9 +331,9 @@ Every limitation is documented and measured in
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md). PRs especially welcome for:
 
-- Swapping `HashEmbedder` for a real embedder via `fastembed-rs`
-  (BGE-small / nomic-embed) behind a feature flag
-- Python and TypeScript bindings
+- TypeScript bindings (Python bindings ship in `sophon-py/`)
+- TOML-based extractor plugins for new languages (see
+  `crates/codebase-navigator/plugins/haskell.toml` for the format)
 - More grammars for `navigate_codebase`
 - Running the real `mem0` library on LOCOMO to replace the
   `mem0-lite` surrogate in § 7.8.e
@@ -324,12 +341,11 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md). PRs especially welcome for:
 Run the full test suite with:
 
 ```bash
-cd sophon && cargo test --workspace
-# with the tree-sitter feature:
-cd sophon && cargo test --features codebase-navigator/tree-sitter
+cd sophon && cargo test --workspace                                  # 194 tests
+cd sophon && cargo test --features codebase-navigator/tree-sitter    # +15 AST tests
+cd sophon && cargo test -p semantic-retriever --features bge -- --ignored  # 5 BGE tests (needs model)
+cd sophon-py && .venv/bin/pytest tests/                              # 4 Python tests
 ```
-
-209 tests workspace-wide, all reproducible.
 
 ---
 

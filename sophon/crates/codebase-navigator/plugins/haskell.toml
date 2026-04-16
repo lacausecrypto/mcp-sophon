@@ -1,0 +1,52 @@
+# Haskell symbol extractor plugin for codebase-navigator.
+#
+# Covers the most common top-level declarations in .hs / .lhs files.
+# Limitations (same as all regex extractors):
+#   - Multi-line type signatures are captured by the first line only.
+#   - Declarations inside comments or strings may produce false positives.
+
+[extractor]
+name = "Haskell"
+extensions = ["hs", "lhs"]
+
+# ── Function / value type signatures ────────────────────────────
+# Matches: factorial :: Int -> Int
+[[patterns]]
+kind = "function"
+pattern = '(?m)^(\w+)\s*::\s*(.+)$'
+name_group = 1
+
+# ── Algebraic data types ────────────────────────────────────────
+# Matches: data Tree a = Leaf a | Branch (Tree a) (Tree a)
+[[patterns]]
+kind = "class"
+pattern = '(?m)^data\s+(\w+)'
+name_group = 1
+
+# ── Newtype declarations ────────────────────────────────────────
+# Matches: newtype Wrapper a = Wrapper { unwrap :: a }
+[[patterns]]
+kind = "struct"
+pattern = '(?m)^newtype\s+(\w+)'
+name_group = 1
+
+# ── Type aliases ────────────────────────────────────────────────
+# Matches: type String = [Char]
+[[patterns]]
+kind = "type_alias"
+pattern = '(?m)^type\s+(\w+)'
+name_group = 1
+
+# ── Type classes ────────────────────────────────────────────────
+# Matches: class Functor f where
+[[patterns]]
+kind = "trait"
+pattern = '(?m)^class\s+(?:\(.*?\)\s*=>\s*)?(\w+)'
+name_group = 1
+
+# ── Module declarations ────────────────────────────────────────
+# Matches: module Data.Map where
+[[patterns]]
+kind = "module"
+pattern = '(?m)^module\s+([\w.]+)'
+name_group = 1

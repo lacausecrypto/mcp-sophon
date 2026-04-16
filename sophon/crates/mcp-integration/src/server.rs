@@ -72,7 +72,32 @@ impl SophonServer {
                 let dir = expand_tilde(&raw);
                 let mut rcfg = RetrieverConfig::default();
                 rcfg.storage_path = dir.join("chunks.jsonl");
-                match Retriever::open(rcfg) {
+
+                let embedder_choice = std::env::var("SOPHON_EMBEDDER")
+                    .unwrap_or_default()
+                    .to_lowercase();
+
+                let result = match embedder_choice.as_str() {
+                    #[cfg(feature = "bge")]
+                    "bge" => {
+                        eprintln!("[sophon] Using BGE-small-en-v1.5 embedder (semantic)");
+                        match semantic_retriever::BgeEmbedder::new() {
+                            Ok(bge) => Retriever::with_embedder(
+                                rcfg,
+                                std::sync::Arc::new(bge),
+                            ),
+                            Err(e) => {
+                                eprintln!(
+                                    "[sophon] WARNING: BGE embedder failed to load: {e}. Falling back to HashEmbedder."
+                                );
+                                Retriever::open(rcfg)
+                            }
+                        }
+                    }
+                    _ => Retriever::open(rcfg),
+                };
+
+                match result {
                     Ok(r) => Some(r),
                     Err(e) => {
                         eprintln!(

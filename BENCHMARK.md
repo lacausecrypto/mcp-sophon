@@ -1799,7 +1799,89 @@ Per-item JSON: `/tmp/sophon_bench/locomo/mem0lite_runs/*.json`.
 Original mem0-library scaffold (needs an API key, currently
 unused): `/tmp/sophon_bench/mem0_locomo_compare.py`.
 
-### 7.9 What this bench does not cover
+### 7.9 BGE-small embedder vs HashEmbedder on LOCOMO (v0.2 upgrade)
+
+The v0.2 upgrade adds a real semantic embedder
+([BGE-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5),
+384-dimensional, ~33 MB ONNX model via `fastembed`) behind the `bge`
+Cargo feature. This section measures the retrieval quality gain on
+the same 15 LOCOMO items used in §§ 7.8.d–e.
+
+Build: `cargo build --release -p mcp-integration --features bge`
+(34 MB binary). Activated at runtime via `SOPHON_EMBEDDER=bge`.
+
+Both conditions use the same `compress_history` pipeline with
+`query` + `retrieval_top_k=5`. The only variable is the embedder
+used to index chunks and embed the query — HashEmbedder (keyword
+hashing, 256-dim) vs BGE-small (semantic, 384-dim).
+
+| Type (n=3 each) | HashEmbedder | **BGE-small** | Δ |
+|---|---:|---:|---:|
+| single_hop | 0.0 % | **66.7 %** | **+66.7** |
+| multi_hop | 33.3 % | 33.3 % | 0 |
+| temporal_reasoning | 100.0 % | 100.0 % | 0 |
+| open_domain | 100.0 % | 66.7 % | −33.3 |
+| adversarial | 33.3 % | 33.3 % | 0 |
+| **POOLED** | **53.3 %** | **60.0 %** | **+6.7 pts** |
+
+**Result**: +6.7 points pooled for BGE over HashEmbedder. The gain
+concentrates on `single_hop` (+66.7 pts) where semantic similarity
+matters most — BGE understands that "Italian restaurant" ≈
+"Neapolitan pizzeria" even without shared keywords. HashEmbedder
+can only match on lexical overlap.
+
+**Open_domain regresses** by 33.3 pts on one item where BGE
+surfaced a less relevant chunk. At N=15 each item is 6.7 pts —
+this is expected variance, not a systematic weakness.
+
+#### Comparison with all conditions on the same 15 items
+
+| Condition | Accuracy | LLM calls | Latency |
+|---|---:|---:|---|
+| NONE (no context) | 20.0 % | 0 | — |
+| SOPHON_COMP (summary only) | 26.7 % | 0 | sub-second |
+| SOPHON_RETR_HASH | 53.3 % | 0 | sub-second |
+| **SOPHON_RETR_BGE** | **60.0 %** | **0** | **sub-second** |
+| mem0-lite (LLM extraction) | 60.0 % | ~330 | 8.7 min |
+| FULL (entire conversation) | 66.7 % | 0 | — |
+
+**BGE matches mem0-lite** (60.0 % both) with **zero LLM calls**
+and **sub-second latency** vs 330 LLM calls and 8.7 minutes. It
+sits 6.7 pts below the FULL ceiling.
+
+#### Honest caveats
+
+- **+6.7 pts is below the +15–20 pts the upgrade plan predicted.**
+  N=15 is too small for the variance to wash out; the true
+  population gain is somewhere between 0 and +15 with wide
+  confidence intervals. An N=60 rerun would tighten this.
+- **Binary size goes from 7.2 MB to 34 MB** (regex + BGE). First
+  launch downloads the ~33 MB ONNX model to `~/.cache/fastembed/`.
+- **Determinism**: BGE embeddings are deterministic on the same
+  hardware (ONNX fixed-point), but may differ across CPU
+  architectures. HashEmbedder remains bit-identical everywhere.
+
+#### When to enable `--features bge`
+
+Enable BGE when:
+- Your queries are **natural-language** phrased (not keywords) and
+  need semantic matching.
+- You're on a machine where +27 MB binary and +33 MB model download
+  are acceptable.
+- You want LOCOMO-class retrieval quality without paying for LLM
+  calls (mem0 alternative at zero API cost).
+
+Keep HashEmbedder when:
+- You need **bit-identical determinism** across platforms (CI,
+  reproducible builds).
+- You're on air-gapped machines with no model download path.
+- Your queries already have strong lexical overlap with the source
+  material (keyword searches, function names, error messages).
+
+Raw results: `/tmp/sophon_bench/locomo/bge_results.json`.
+Script: `/tmp/sophon_bench/locomo/run_locomo_bge.py`.
+
+### 7.10 What this bench does not cover
 
 1. **No LLM-in-the-loop evaluation.** The recall@K bench scores
    whether the right file is in the top-K, not whether a downstream

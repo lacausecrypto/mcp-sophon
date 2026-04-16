@@ -1,0 +1,41 @@
+[package]
+name = "sophon-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.prompt-compressor]
+path = "../crates/prompt-compressor"
+
+[dependencies.output-compressor]
+path = "../crates/output-compressor"
+
+[dependencies.fragment-cache]
+path = "../crates/fragment-cache"
+
+[[bin]]
+name = "prompt_parser"
+path = "fuzz_targets/prompt_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "output_compressor"
+path = "fuzz_targets/output_compressor.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fragment_detector"
+path = "fuzz_targets/fragment_detector.rs"
+test = false
+doc = false
+bench = false

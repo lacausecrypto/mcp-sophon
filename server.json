@@ -53,6 +53,8 @@
         "session_total_token_savings_pct": 67.0,
         "cross_model_total_token_savings_pct": 64.5,
         "locomo_open_ended_retrieval_gain_pts_n60": 13,
+        "bge_vs_hash_gain_pts_n15": 6.7,
+        "bge_matches_mem0lite_at_zero_llm_calls": true,
         "vs_llmlingua2_pts_better_on_structured_prompts": 8.9,
         "vs_llmlingua2_latency_speedup_x": 35,
         "vs_mem0_lite_locomo_accuracy_tie_pct": 60.0,

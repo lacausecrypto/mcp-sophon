@@ -9,8 +9,10 @@ members = [
     "crates/output-compressor",
     "crates/cli-hooks",
     "crates/codebase-navigator",
+    "crates/sophon-storage",
     "crates/mcp-integration",
 ]
+exclude = ["fuzz"]
 resolver = "2"
 
 [workspace.package]

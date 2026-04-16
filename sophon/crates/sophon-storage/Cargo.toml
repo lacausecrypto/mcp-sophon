@@ -1,0 +1,17 @@
+[package]
+name = "sophon-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+sophon-core = { path = "../sophon-core" }
+
+[dev-dependencies]
+tempfile = "3"

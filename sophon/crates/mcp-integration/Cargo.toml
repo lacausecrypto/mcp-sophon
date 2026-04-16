@@ -26,3 +26,7 @@ output-compressor = { path = "../output-compressor" }
 cli-hooks = { path = "../cli-hooks" }
 codebase-navigator = { path = "../codebase-navigator" }
 sophon-core = { path = "../sophon-core" }
+
+[features]
+default = []
+bge = ["semantic-retriever/bge"]
