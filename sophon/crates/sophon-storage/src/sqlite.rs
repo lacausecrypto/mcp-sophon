@@ -121,10 +121,7 @@ impl SqliteStorage {
 
     pub fn delete_session(&self, session_id: &str) -> Result<usize, StorageError> {
         let conn = self.conn.lock().unwrap();
-        let count = conn.execute(
-            "DELETE FROM memories WHERE session_id = ?1",
-            [session_id],
-        )?;
+        let count = conn.execute("DELETE FROM memories WHERE session_id = ?1", [session_id])?;
         Ok(count)
     }
 
@@ -140,8 +137,7 @@ impl SqliteStorage {
 
     pub fn get_embedding(&self, content_hash: &[u8]) -> Result<Option<Vec<f32>>, StorageError> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt =
-            conn.prepare("SELECT embedding FROM embeddings WHERE content_hash = ?1")?;
+        let mut stmt = conn.prepare("SELECT embedding FROM embeddings WHERE content_hash = ?1")?;
         match stmt.query_row([content_hash], |row| {
             let blob: Vec<u8> = row.get(0)?;
             Ok(bytes_to_f32(&blob))
@@ -178,9 +174,8 @@ impl SqliteStorage {
 
     pub fn get_fragment(&self, hash: &str) -> Result<Option<Fragment>, StorageError> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, content, hash, usage_count FROM fragments WHERE hash = ?1",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT id, content, hash, usage_count FROM fragments WHERE hash = ?1")?;
         match stmt.query_row([hash], |row| {
             Ok(Fragment {
                 id: row.get(0)?,

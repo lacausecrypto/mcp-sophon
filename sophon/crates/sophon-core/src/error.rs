@@ -100,10 +100,7 @@ pub enum TokenizerError {
 // Backwards-compat re-exports for crates that still use the old variants
 impl SophonError {
     pub fn token_limit(current: usize, max: usize) -> Self {
-        Self::Compression(CompressionError::PromptTooLarge {
-            size: current,
-            max,
-        })
+        Self::Compression(CompressionError::PromptTooLarge { size: current, max })
     }
 
     pub fn parse(msg: impl Into<String>) -> Self {

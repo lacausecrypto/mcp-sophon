@@ -67,8 +67,7 @@ impl PluginExtractor {
 
     /// Parse a plugin extractor from a TOML string (useful for tests).
     pub fn from_toml(toml_text: &str) -> Result<Self> {
-        let def: PluginToml =
-            toml::from_str(toml_text).context("parsing plugin TOML")?;
+        let def: PluginToml = toml::from_str(toml_text).context("parsing plugin TOML")?;
 
         // Leak the language name to get a &'static str.
         let language: &'static str = Box::leak(def.extractor.name.into_boxed_str());
@@ -86,8 +85,8 @@ impl PluginExtractor {
         for p in def.patterns {
             let regex = Regex::new(&p.pattern)
                 .with_context(|| format!("compiling pattern for kind '{}'", p.kind))?;
-            let kind = parse_kind(&p.kind)
-                .with_context(|| format!("unknown symbol kind '{}'", p.kind))?;
+            let kind =
+                parse_kind(&p.kind).with_context(|| format!("unknown symbol kind '{}'", p.kind))?;
             patterns.push(CompiledPattern {
                 regex,
                 kind,

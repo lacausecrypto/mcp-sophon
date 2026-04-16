@@ -10,11 +10,7 @@ pub enum StorageError {
     Io(#[from] std::io::Error),
 
     #[error("migration failed from v{from} to v{to}: {reason}")]
-    Migration {
-        from: u32,
-        to: u32,
-        reason: String,
-    },
+    Migration { from: u32, to: u32, reason: String },
 
     #[error("session not found: {0}")]
     SessionNotFound(String),

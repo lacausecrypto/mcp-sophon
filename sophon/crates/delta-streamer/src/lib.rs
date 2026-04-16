@@ -166,10 +166,7 @@ impl DeltaStreamer {
                 operations,
             } => {
                 if base_version != current_version {
-                    return Err(SophonError::version_mismatch(
-                        current_version,
-                        base_version,
-                    ));
+                    return Err(SophonError::version_mismatch(current_version, base_version));
                 }
                 apply_diff(&existing_content, &operations)
                     .map_err(|e| SophonError::parse(e.to_string()))?

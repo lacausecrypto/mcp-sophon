@@ -82,10 +82,7 @@ impl SophonServer {
                     "bge" => {
                         eprintln!("[sophon] Using BGE-small-en-v1.5 embedder (semantic)");
                         match semantic_retriever::BgeEmbedder::new() {
-                            Ok(bge) => Retriever::with_embedder(
-                                rcfg,
-                                std::sync::Arc::new(bge),
-                            ),
+                            Ok(bge) => Retriever::with_embedder(rcfg, std::sync::Arc::new(bge)),
                             Err(e) => {
                                 eprintln!(
                                     "[sophon] WARNING: BGE embedder failed to load: {e}. Falling back to HashEmbedder."

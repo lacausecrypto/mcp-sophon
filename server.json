@@ -3,7 +3,7 @@
   "name": "io.github.lacausecrypto/sophon",
   "title": "Sophon",
   "description": "Honest token economics for MCP agents. Rust binary, zero ML, reproducible benchmarks.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "repository": {
     "url": "https://github.com/lacausecrypto/mcp-sophon",
     "source": "github"
@@ -14,7 +14,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "mcp-sophon",
-      "version": "0.1.1",
+      "version": "0.2.0",
       "transport": {
         "type": "stdio"
       },
@@ -50,14 +50,14 @@
       },
       "tokenizer": "cl100k_base",
       "benchmarks": {
-        "session_total_token_savings_pct": 67.0,
+        "session_total_token_savings_pct": 67,
         "cross_model_total_token_savings_pct": 64.5,
         "locomo_open_ended_retrieval_gain_pts_n60": 13,
         "bge_vs_hash_gain_pts_n15": 6.7,
         "bge_matches_mem0lite_at_zero_llm_calls": true,
         "vs_llmlingua2_pts_better_on_structured_prompts": 8.9,
         "vs_llmlingua2_latency_speedup_x": 35,
-        "vs_mem0_lite_locomo_accuracy_tie_pct": 60.0,
+        "vs_mem0_lite_locomo_accuracy_tie_pct": 60,
         "vs_mem0_lite_latency_ratio_sophon_over_mem0": "sub-second vs 8.7 min",
         "compression_overhead_ms_per_call": 6
       },

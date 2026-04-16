@@ -1,6 +1,6 @@
 {
   "name": "mcp-sophon",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "mcpName": "io.github.lacausecrypto/sophon",
   "description": "Honest token economics for MCP agents. Deterministic context layer: prompt compression, conversation memory, code navigation, file delta, output compression. Single Rust binary, zero ML, reproducible benchmarks. ~67% session savings; ties mem0 on LOCOMO at sub-second vs 8.7 min; beats LLMLingua-2 on structured prompts by ~10pts at ~35x lower latency.",
   "keywords": [

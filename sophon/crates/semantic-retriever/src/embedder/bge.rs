@@ -24,8 +24,7 @@ pub struct BgeEmbedder {
 impl BgeEmbedder {
     pub fn new() -> Result<Self, EmbedderError> {
         let model = TextEmbedding::try_new(
-            InitOptions::new(EmbeddingModel::BGESmallENV15)
-                .with_show_download_progress(true),
+            InitOptions::new(EmbeddingModel::BGESmallENV15).with_show_download_progress(true),
         )
         .map_err(|e| EmbedderError::Model(format!("failed to load BGE-small: {e}")))?;
 
@@ -147,7 +146,10 @@ mod tests {
             sim_related > sim_unrelated,
             "related={sim_related:.3} should be > unrelated={sim_unrelated:.3}"
         );
-        assert!(sim_related > 0.5, "related={sim_related:.3} should be > 0.5");
+        assert!(
+            sim_related > 0.5,
+            "related={sim_related:.3} should be > 0.5"
+        );
     }
 
     #[test]

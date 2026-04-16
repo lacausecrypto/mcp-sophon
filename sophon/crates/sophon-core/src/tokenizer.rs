@@ -172,7 +172,12 @@ mod tests {
             TokenizerBackend::P50kBase,
         ] {
             let tok = backend.build();
-            assert_eq!(tok.count(""), 0, "{} should return 0 for empty text", tok.name());
+            assert_eq!(
+                tok.count(""),
+                0,
+                "{} should return 0 for empty text",
+                tok.name()
+            );
             assert!(tok.encode("").is_empty());
         }
     }

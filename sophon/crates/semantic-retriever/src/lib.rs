@@ -22,9 +22,9 @@ pub mod retriever;
 pub mod store;
 
 pub use chunker::{chunk_messages, Chunk, ChunkConfig, ChunkType};
-pub use embedder::{Embedder, HashEmbedder};
 #[cfg(feature = "bge")]
 pub use embedder::BgeEmbedder;
+pub use embedder::{Embedder, HashEmbedder};
 pub use index::VectorIndex;
 pub use retriever::{
     RetrievalResult, RetrievedChunk, Retriever, RetrieverConfig, RetrieverError, ScoredChunk,
