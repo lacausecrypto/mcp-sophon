@@ -55,4 +55,12 @@ jobs:
             echo "::notice::Version already published to MCP registry — treating as success"
             exit 0
           fi
+          # Tolerate npm-not-found — happens when the tag workflow runs
+          # before the npm package is published (manual or via Release
+          # workflow). The maintainer publishes npm separately and then
+          # re-runs this workflow or publishes via CLI.
+          if echo "$output" | grep -qi "not found.*404\|NPM package.*not found"; then
+            echo "::warning::npm package not yet published — MCP registry publish deferred. Run 'mcp-publisher publish' after 'npm publish'."
+            exit 0
+          fi
           exit $exit_code
