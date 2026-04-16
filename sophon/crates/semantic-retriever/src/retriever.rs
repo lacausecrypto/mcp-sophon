@@ -173,6 +173,12 @@ impl Retriever {
         self.embedder.name()
     }
 
+    /// Access the underlying embedder (e.g. for scoring prompt sections
+    /// via cosine similarity from the MCP handler layer).
+    pub fn embedder(&self) -> &dyn Embedder {
+        self.embedder.as_ref()
+    }
+
     /// Index a batch of messages. Returns the number of *new* chunks
     /// actually written (existing chunks are skipped).
     pub fn index_messages(

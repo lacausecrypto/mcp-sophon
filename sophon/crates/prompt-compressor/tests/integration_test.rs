@@ -23,7 +23,7 @@ fn test_compress_for_coding_query() {
         ..Default::default()
     };
 
-    let result = compress_prompt(&prompt, &analysis, &config);
+    let result = compress_prompt(&prompt, &analysis, &config, None);
 
     assert!(result.token_count <= 100);
     assert!(result
@@ -56,7 +56,7 @@ fn test_compression_ratio() {
         ..Default::default()
     };
 
-    let result = compress_prompt(&parsed, &analysis, &config);
+    let result = compress_prompt(&parsed, &analysis, &config, None);
     // compressed/original, lower is better. Expect strong compression here.
     assert!(result.compression_ratio > 0.0 && result.compression_ratio <= 0.5);
     assert!(result.token_count < parsed.total_tokens);

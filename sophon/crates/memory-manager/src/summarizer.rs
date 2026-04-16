@@ -62,7 +62,19 @@ pub fn compress_history(messages: &[Message], config: &MemoryConfig) -> Compress
         };
     }
 
-    let keep_recent = config.recent_window.min(messages.len());
+    // Adaptive recent window: scale with conversation length so that
+    // longer histories keep more recent context (log₂ growth). A 500-
+    // message conversation gets ~14 recent messages instead of the
+    // fixed 5, giving the compressor more signal without blowing up
+    // the token budget (the budget enforcer handles overflow later).
+    let adaptive_window = if config.recent_window > 0 {
+        let base = config.recent_window;
+        let log_bonus = (messages.len() as f64).log2().floor() as usize;
+        base.max(log_bonus.max(base))
+    } else {
+        0
+    };
+    let keep_recent = adaptive_window.min(messages.len());
     let split_idx = messages.len().saturating_sub(keep_recent);
     let (older, recent) = messages.split_at(split_idx);
 

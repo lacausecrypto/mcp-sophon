@@ -50,14 +50,14 @@ source of truth for everything Sophon claims.
   accuracy, Sophon runs sub-second vs 8.7 minutes and zero LLM calls
   vs ~330**
   ([BENCHMARK.md § 7.8.e](./BENCHMARK.md#78e-mem0-lite-on-locomo--same-item-comparison))
-- **BGE-small semantic embedder** (v0.2, `--features bge`): **+6.7 pts**
-  over HashEmbedder on LOCOMO, **+66.7 pts on single-hop** queries where
-  semantic understanding matters most — zero LLM calls, sub-second
-  ([BENCHMARK.md § 7.9](./BENCHMARK.md#79-bge-small-embedder-vs-hashembedder-on-locomo-v02-upgrade))
+- **v0.2.1 adaptive window** — **+6.6 pts** on LOCOMO compression-only
+  (26.7 % → 33.3 %), **+6.7 pts** on retrieval (53.3 % → 60.0 %), from
+  a single formula change: `recent_window = max(5, log₂(n_messages))`
+  ([BENCHMARK.md § 7.10](./BENCHMARK.md#710-v021-all-conditions-rerun-adaptive-window-overlap-fix-5-new-output-filters))
 - **LOCOMO semantic retriever gain**: enabling the opt-in retriever
-  adds **+13 accuracy points** over compression alone on open-ended
-  questions at N=60
-  ([BENCHMARK.md § 3.7](./BENCHMARK.md#37-locomo-open-ended-retrieval-n60))
+  adds **+27 accuracy points** over compression alone on the same
+  N=15 items (33.3 % COMP → 60.0 % RETR, v0.2.1 numbers)
+  ([BENCHMARK.md § 7.10](./BENCHMARK.md#710-v021-all-conditions-rerun-adaptive-window-overlap-fix-5-new-output-filters))
 
 Every head-to-head above runs on the same machine, same tokenizer
 (`tiktoken cl100k_base`), same LLM judge, and same inputs. The

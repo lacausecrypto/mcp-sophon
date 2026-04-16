@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use chrono::Utc;
@@ -120,9 +121,22 @@ pub fn handle_tool_call(
     match name {
         "compress_prompt" => {
             let args: CompressPromptArgs = serde_json::from_value(arguments)?;
+
+            // When a semantic embedder is available (via the retriever),
+            // compute per-section cosine similarity scores so the compressor
+            // can include sections that match semantically even without a
+            // keyword hit (e.g. "loop" ≈ "iteration").
+            let section_scores = compute_section_scores(server, &args.prompt, &args.query);
+
             let parsed = server
                 .prompt_compressor
-                .compress(&args.prompt, &args.query, None, args.max_tokens)
+                .compress_with_scores(
+                    &args.prompt,
+                    &args.query,
+                    None,
+                    args.max_tokens,
+                    section_scores.as_ref(),
+                )
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             server.stats.record(
@@ -396,6 +410,50 @@ pub fn handle_tool_call(
         }
         _ => Err(anyhow::anyhow!("unknown tool: {}", name)),
     }
+}
+
+/// Compute per-section semantic similarity scores using the embedder
+/// from the retriever (if available). Extracts XML/markdown sections
+/// from the prompt, embeds each alongside the query, and returns
+/// a section_id → cosine_similarity map.
+///
+/// Returns `None` if no retriever/embedder is available, keeping the
+/// fallback to keyword-only scoring.
+fn compute_section_scores(
+    server: &SophonServer,
+    prompt: &str,
+    query: &str,
+) -> Option<HashMap<String, f32>> {
+    let retriever = server.retriever.as_ref()?;
+    let embedder = retriever.embedder();
+
+    // Quick parse to get section IDs + content
+    let parsed = server.prompt_compressor.parse(prompt).ok()?;
+    if parsed.sections.is_empty() {
+        return None;
+    }
+
+    // Embed the query
+    let query_vec = embedder.embed(query).ok()?;
+
+    let mut scores = HashMap::new();
+    for section in &parsed.sections {
+        // Use section content for embedding (not just the name)
+        let text = if section.content.len() > 500 {
+            &section.content[..500]
+        } else {
+            &section.content
+        };
+        if text.trim().is_empty() {
+            continue;
+        }
+        if let Ok(sec_vec) = embedder.embed(text) {
+            let sim: f32 = query_vec.iter().zip(&sec_vec).map(|(a, b)| a * b).sum();
+            scores.insert(section.id.clone(), sim);
+        }
+    }
+
+    Some(scores)
 }
 
 fn parse_role(role: &str) -> Role {

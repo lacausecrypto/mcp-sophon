@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use regex::Regex;
 
@@ -43,6 +43,10 @@ pub fn detect_fragments(content: &str, min_tokens: usize) -> Vec<DetectedFragmen
     }
 
     detected.extend(detect_repeated_patterns(content, min_tokens));
+
+    // Near-duplicate pre-pass: catch paragraphs that differ only by a number
+    // or minor token variation (Jaccard >= 0.95).
+    detected.extend(detect_near_duplicates(content, min_tokens, 0.95));
 
     for (signature, category) in BOILERPLATE_SIGNATURES {
         if content.contains(signature) {
@@ -159,6 +163,78 @@ fn count_non_overlapping(haystack: &str, needle: &str) -> usize {
     count
 }
 
+/// Jaccard similarity over whitespace tokens.
+fn jaccard(a: &str, b: &str) -> f32 {
+    let ta: HashSet<&str> = a.split_whitespace().collect();
+    let tb: HashSet<&str> = b.split_whitespace().collect();
+    if ta.is_empty() && tb.is_empty() {
+        return 1.0;
+    }
+    let inter = ta.intersection(&tb).count() as f32;
+    let union = ta.union(&tb).count() as f32;
+    if union == 0.0 {
+        0.0
+    } else {
+        inter / union
+    }
+}
+
+/// Near-duplicate detection: for each unique paragraph, check Jaccard
+/// similarity against other paragraphs. If similarity >= threshold, treat
+/// the first occurrence as a reusable fragment.
+fn detect_near_duplicates(
+    content: &str,
+    min_tokens: usize,
+    threshold: f32,
+) -> Vec<DetectedFragment> {
+    let paragraphs: Vec<&str> = content
+        .split("\n\n")
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .collect();
+
+    if paragraphs.len() < 2 {
+        return Vec::new();
+    }
+
+    let mut detected = Vec::new();
+    let mut used: HashSet<usize> = HashSet::new();
+
+    for i in 0..paragraphs.len() {
+        if used.contains(&i) {
+            continue;
+        }
+        let tokens_i = sophon_core::tokens::count_tokens(paragraphs[i]);
+        if tokens_i < min_tokens {
+            continue;
+        }
+        let mut has_near_dup = false;
+        for j in (i + 1)..paragraphs.len() {
+            if used.contains(&j) {
+                continue;
+            }
+            // Skip exact matches — those are handled by the existing pass.
+            if paragraphs[i] == paragraphs[j] {
+                continue;
+            }
+            if jaccard(paragraphs[i], paragraphs[j]) >= threshold {
+                has_near_dup = true;
+                used.insert(j);
+            }
+        }
+        if has_near_dup {
+            used.insert(i);
+            detected.push(DetectedFragment {
+                content: paragraphs[i].to_string(),
+                category: FragmentCategory::Template,
+                confidence: 0.72,
+            });
+        }
+    }
+
+    detected
+}
+
 fn dedupe_detected(detected: Vec<DetectedFragment>) -> Vec<DetectedFragment> {
     let mut seen = HashMap::<String, DetectedFragment>::new();
     for item in detected {
@@ -172,4 +248,61 @@ fn dedupe_detected(detected: Vec<DetectedFragment>) -> Vec<DetectedFragment> {
         }
     }
     seen.into_values().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn near_duplicate_paragraphs_detected() {
+        // Two paragraphs that differ only by a single number should be
+        // caught as near-duplicates (Jaccard >= 0.95). The paragraph must
+        // be long enough that one differing token keeps Jaccard above 0.95.
+        // With ~40 shared tokens and 1 differing, Jaccard = 40/42 ≈ 0.952.
+        let shared = "The quick brown fox jumped over the lazy dog and then \
+                       ran across the wide open meadow before stopping at the \
+                       edge of the forest where the tall oak trees swayed gently \
+                       in the warm afternoon breeze while birds sang their songs";
+        let content = format!("{shared} item 1\n\n{shared} item 2");
+        let detected = detect_fragments(&content, 1);
+        let near_dup = detected.iter().find(|d| d.content.contains("item 1"));
+        assert!(
+            near_dup.is_some(),
+            "expected near-duplicate detection for paragraphs differing by a single number, got: {:?}",
+            detected,
+        );
+    }
+
+    #[test]
+    fn exact_duplicates_still_detected() {
+        let content = "repeated paragraph here\n\nrepeated paragraph here";
+        let detected = detect_fragments(content, 1);
+        assert!(
+            !detected.is_empty(),
+            "exact duplicates should still be detected",
+        );
+    }
+
+    #[test]
+    fn dissimilar_paragraphs_not_flagged() {
+        let content = "The quick brown fox jumped over the lazy dog.\n\n\
+                        A completely different sentence about unrelated topics.";
+        let detected = detect_near_duplicates(content, 1, 0.95);
+        assert!(
+            detected.is_empty(),
+            "dissimilar paragraphs should not be flagged as near-duplicates, got: {:?}",
+            detected,
+        );
+    }
+
+    #[test]
+    fn jaccard_identical_strings() {
+        assert!((jaccard("a b c", "a b c") - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn jaccard_disjoint_strings() {
+        assert!((jaccard("a b c", "x y z")).abs() < f32::EPSILON);
+    }
 }

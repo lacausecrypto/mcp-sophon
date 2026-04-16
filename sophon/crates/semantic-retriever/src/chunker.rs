@@ -308,8 +308,26 @@ fn apply_overlap(
 
 fn tail_tokens(content: &str, n: usize) -> String {
     let words: Vec<&str> = content.split_whitespace().collect();
-    let start = words.len().saturating_sub(n);
-    words[start..].join(" ")
+    if words.is_empty() || n == 0 {
+        return String::new();
+    }
+    // Walk backwards, adding one word at a time and measuring the token
+    // count of the *joined* candidate string (BPE token boundaries shift
+    // depending on surrounding context, so counting individual words is
+    // insufficient).
+    let mut best_start = words.len();
+    for start in (0..words.len()).rev() {
+        let candidate = words[start..].join(" ");
+        let tc = count_tokens(&candidate);
+        if tc > n && best_start < words.len() {
+            break;
+        }
+        best_start = start;
+        if tc >= n {
+            break;
+        }
+    }
+    words[best_start..].join(" ")
 }
 
 fn build_chunk(
@@ -418,6 +436,32 @@ mod tests {
         assert!(chunks
             .iter()
             .any(|c| matches!(c.chunk_type, ChunkType::AssistantResponse)));
+    }
+
+    #[test]
+    fn tail_tokens_counts_tokens_not_words() {
+        // "hello" is 1 token but "world" is also 1 token in cl100k_base.
+        // A multi-byte / multi-token word should cause fewer words to be
+        // taken than the plain word-count approach would yield.
+        let content = "aaa bbb ccc ddd eee";
+        // Ask for 2 tokens of overlap. With the old word-based approach this
+        // would return the last 2 whitespace-delimited words regardless of
+        // their actual token cost. The new implementation counts real tokens.
+        let tail = tail_tokens(content, 2);
+        let actual = count_tokens(&tail);
+        // The tail must be <= 2 tokens (it may be exactly 2 if each word is
+        // 1 token, but must never exceed the requested budget).
+        assert!(
+            actual <= 2,
+            "tail_tokens produced {} tokens (content: {:?}), expected <= 2",
+            actual,
+            tail,
+        );
+        // It should contain at least 1 token.
+        assert!(
+            actual >= 1,
+            "tail_tokens produced 0 tokens, expected at least 1",
+        );
     }
 
     #[test]

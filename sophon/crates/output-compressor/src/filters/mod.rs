@@ -1,10 +1,15 @@
 //! Filter registry — a list of `FilterConfig`s tried in order, with a
 //! generic fallback at the end.
 
+pub mod curl_json;
 pub mod docker;
 pub mod filesystem;
 pub mod generic;
 pub mod git;
+pub mod kubectl;
+pub mod npm_install;
+pub mod pip_install;
+pub mod terraform;
 pub mod test_runners;
 
 use crate::strategy::FilterConfig;
@@ -41,6 +46,15 @@ impl FilterRegistry {
                 // Docker
                 docker::docker_ps_filter(),
                 docker::docker_logs_filter(),
+                // Package managers
+                npm_install::npm_install_filter(),
+                pip_install::pip_install_filter(),
+                // Infrastructure
+                terraform::terraform_apply_filter(),
+                kubectl::kubectl_get_filter(),
+                kubectl::kubectl_describe_filter(),
+                // HTTP clients
+                curl_json::curl_json_filter(),
                 // Fallback MUST be last
                 generic::generic_filter(),
             ],
@@ -70,8 +84,8 @@ mod tests {
     #[test]
     fn registry_has_all_filters() {
         let r = FilterRegistry::new();
-        // 4 git + 4 tests + 3 fs + 2 docker + 1 generic = 14
-        assert_eq!(r.filter_count(), 14);
+        // 4 git + 4 tests + 3 fs + 2 docker + 2 pkg + 3 infra + 1 http + 1 generic = 20
+        assert_eq!(r.filter_count(), 20);
     }
 
     #[test]

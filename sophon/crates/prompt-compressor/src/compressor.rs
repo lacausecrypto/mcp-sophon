@@ -7,6 +7,12 @@ use crate::{
     parser::{ParsedPrompt, PromptSection},
 };
 
+/// Minimum cosine similarity for a section to be auto-included via
+/// semantic scoring. Tuned so that genuinely related content
+/// ("iteration" ↔ "loop") clears the bar (~0.65+) while noise
+/// ("weather" ↔ "rust errors") stays below (~0.2–0.4).
+const SEMANTIC_INCLUDE_THRESHOLD: f32 = 0.55;
+
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(default)]
 pub struct CompressionConfig {
@@ -69,10 +75,18 @@ fn default_topic_mappings() -> HashMap<String, Vec<String>> {
 }
 
 /// Compress a prompt based on query analysis.
+///
+/// `section_scores` is an optional map of `section_id → cosine_similarity`
+/// produced by an external embedder (e.g. BGE-small). When provided,
+/// sections with a score above `SEMANTIC_INCLUDE_THRESHOLD` are auto-
+/// included alongside the keyword-matched ones — this closes the gap
+/// where the keyword dictionary misses semantic equivalents ("loop" ≠
+/// "iteration" in keyword space, but ≈ 0.85 in embedding space).
 pub fn compress_prompt(
     parsed: &ParsedPrompt,
     analysis: &QueryAnalysis,
     config: &CompressionConfig,
+    section_scores: Option<&HashMap<String, f32>>,
 ) -> CompressionResult {
     let mut included = HashSet::new();
     // Sections that were explicitly matched by topic routing — these are the
@@ -100,6 +114,20 @@ pub fn compress_prompt(
         {
             included.insert(section.id.clone());
             topic_matched.insert(section.id.clone());
+        }
+    }
+
+    // Semantic section scoring — when an embedder provides cosine
+    // similarity scores, include sections above the threshold even if
+    // no keyword matched. This is the "loop ≈ iteration" fix.
+    if let Some(scores) = section_scores {
+        for section in &parsed.sections {
+            if let Some(&score) = scores.get(&section.id) {
+                if score >= SEMANTIC_INCLUDE_THRESHOLD {
+                    included.insert(section.id.clone());
+                    topic_matched.insert(section.id.clone());
+                }
+            }
         }
     }
 
