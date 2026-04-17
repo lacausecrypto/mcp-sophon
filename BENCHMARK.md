@@ -8,51 +8,75 @@ section.
 If a claim is not supported by a script in this repo or a cited source, it is
 not in this document.
 
-> **Note (scope change):** the `multimodal-optimizer` crate and the
-> `optimize_image` / `optimize_pdf` / `optimize_table` MCP tools have
-> been **removed entirely** from Sophon. Shipping a half-working
-> multimodal path was worse than not shipping one, so the project is
-> now explicitly text-only. See limitation #5 below for rationale.
-> None of the numbers in this document involve the removed tools, so
-> the measurements are unaffected.
+> **Note (scope change):** the `multimodal-optimizer` crate has been
+> removed; Sophon is text-only by design. See § 6.6.
 
 ---
 
-## TL;DR
+## TL;DR — v0.3.0 current numbers
 
-| Dimension | Measured result | Where |
-|---|---|---|
-| `compress_prompt` XML (1 787 tok prompt, 5 queries) | **76.6 %** tokens saved, ratio **0.290** avg | [§ Module benchmarks](#1-module-benchmarks-synthetic-fixtures) |
-| `compress_prompt` plain-text fallback | **83.1 %** tokens saved, ratio **0.169** | [§ Module benchmarks](#1-module-benchmarks-synthetic-fixtures) |
-| `compress_history` on 100 messages | **87.4 %** tokens saved | [§ Module benchmarks](#1-module-benchmarks-synthetic-fixtures) |
-| `read_file_delta` with `known_hash` match | **99.6 %** wire savings (payload 105 B vs 23 475 B) | [§ Module benchmarks](#1-module-benchmarks-synthetic-fixtures) |
-| `encode_fragments` on repeated boilerplate (12×) | **47.6 %** tokens saved | [§ Module benchmarks](#1-module-benchmarks-synthetic-fixtures) |
-| Cross-model LLM bench (3 Claude + 3 Codex, 3 tasks, 2 judges) | **64.5 %** total tokens saved, **statistical parity** on quality (Sonnet Δ +0.17, Opus Δ −0.11; 72 % judge agreement) | [§ Cross-model benchmark](#2-cross-model-benchmark-3-claude--3-codex-profiles) |
-| LOCOMO-MC10 **N = 100** vs FULL context | **70 % vs 77 %** accuracy (**−7 pts**), **96.8 %** tokens saved | [§ LOCOMO MC10](#3-locomo-mc10-benchmark-public-dataset) |
-| LOCOMO **open-ended** N = 60 — compression only | **23 %** vs FULL **73 %** (−50 pts) | [§ LOCOMO open-ended](#37-locomo-open-ended-variant--the-harder-test-n--30) |
-| LOCOMO **open-ended** N = 60 — **compression + new retriever** | **37 %** vs FULL **73 %** (−36 pts) — **+13 pts gained from retrieval** (corrected from v1's +23 pts at N = 30) | [§ semantic-retriever](#4-semantic-retriever-module-the-retrieval-fix) |
-| **Output compression** `git status` smoke test | **55 → 15 tokens (−73 %)**, ratio 0.27, preserves `modified:` lines | [§ 5 output-compressor](#5-output-compressor--compressing-command-stdoutstderr) |
-| **Output compression** `cargo test` (failures-only filter) | Keeps `FAILED` / `panicked` / `test result:`, drops `... ok` lines | [§ 5 output-compressor](#5-output-compressor--compressing-command-stdoutstderr) |
-| Compression overhead (Sophon itself) | **~6 ms / call** amortized | [§ Overhead](#overhead) |
-| Retrieval overhead (HashEmbedder + linear scan, ~600 chunks) | **< 1 ms / call** | [§ semantic-retriever](#4-semantic-retriever-module-the-retrieval-fix) |
-| **Output compressor overhead** | **< 1 ms / call** (regex pass, in-memory) | [§ 5 output-compressor](#5-output-compressor--compressing-command-stdoutstderr) |
-| **Codebase navigator** on Sophon workspace (80 files, 1438 symbols) | **~1200 tokens digest in < 50 ms** (scan + extract + PageRank + render) | [§ 6 codebase-navigator](#6-codebase-navigator--repo-map-without-reading-every-file) |
-| **Public-repo scan** on 5 GitHub repos (serde, flask, express, gin, sinatra — SHAs pinned) | **65–110 ms per session**, 83–208 files, up to 19 985 edges (serde), git-ls-files path honours `.gitignore` | [§ 7 public-repo benchmarks](#7-public-repo-benchmarks--codebase-navigator--output-compressor) |
-| **Recall@K** on real commits (50 commits across 5 repos) | **Pooled recall@5 = 25.7 %, recall@10 = 32.2 %** — wide spread (flask 57.5 % → express 0 %) | [§ 7.3 recall benchmark](#73-recallk-benchmark--real-commits-vs-navigator-ranking) |
-| **Output compressor** on real captured command outputs | Mean **94.3 % tokens saved** on 4 substantial fixtures (`git log` 93.7 %, `grep -rn` 95.4 %, `ls -la` 97.9 %, `git log --name-only` 90.2 %), signal preservation asserted via grep | [§ 7.4 output compressor benchmark](#74-output-compressor-on-real-captured-command-outputs) |
+**The 5 numbers that matter** (stable, reproducible, cross-validated at N=80):
 
-**Honest headline**: Sophon's compression lets you send 64–97 % fewer
-tokens with no measurable quality regression *under favourable
-conditions* (structured XML prompts, multiple-choice memory tasks).
-**With the new `semantic-retriever` module** activated via
-`SOPHON_RETRIEVER_PATH`, the recall gap on open-ended questions
-measurably narrows — on LOCOMO open-ended (**N = 60**), SOPHON_RETR
-reaches **37 %** vs FULL's **73 %**, compared to 23 % without
-retrieval. That's a **+13 pts gain** from adding the lexical
-retriever, **corrected downward from the v1 N = 30 snapshot's
-+23 pts** — honest artefact of doubling the sample. For the
-remaining gap to true semantic retrieval, build with `--features
-bert` to enable the optional candle backend — not yet measured.
+| Dimension | Value | Ref |
+|---|---:|---|
+| **Token savings** — session aggregate (4 calls) | **67.0 %** | [§ 1.7](#17-session-level-aggregate-get_token_stats) |
+| **Token savings** — cross-model (6 variants × 3 tasks) | **64.5 % ± 0.5 %** | [§ 2.1](#21-token-economics-3-tasks-combined-per-variant) |
+| **LOCOMO best Sophon condition** — COMP_LLM, stable N=30/60/80 | **40.0 %** | [§ 7.12](#712-five-pipeline-fixes--n306080-multi-scale-validation) |
+| **LOCOMO retrieval** — HashEmbedder, stable N=30/60/80 | **32.5 %** | [§ 7.12](#712-five-pipeline-fixes--n306080-multi-scale-validation) |
+| **LOCOMO FULL ceiling** (entire conversation) | **71.2 %** (N=80) | [§ 7.12](#712-five-pipeline-fixes--n306080-multi-scale-validation) |
+
+**One-line verdict**: Block-based LLM summary (`SOPHON_LLM_CMD=claude -p`) is the best
+Sophon condition on LOCOMO, beating the retriever by +7.5 pts at ~20 Haiku calls / item
+(~$0.001). All multi-hop questions fail across every Sophon condition — gap needs
+cross-session reasoning that Sophon doesn't have yet.
+
+### Head-to-heads
+
+| vs | Axis | Sophon | Competitor | Δ |
+|---|---|---:|---:|---:|
+| [LLMLingua-2](https://github.com/microsoft/LLMLingua) | Tokens saved on structured prompts | **77.3 % in 63 ms** | 68.4 % in 2 176 ms | +8.9 pts, 35× faster |
+| [mem0-lite](https://github.com/mem0ai/mem0) | LOCOMO accuracy (N=15) | **60.0 %** in sub-second, 0 LLM calls | 60.0 % in 8.7 min, ~330 LLM calls | Tie accuracy, 300× cheaper |
+| [Aider repomap](https://aider.chat/docs/repomap.html) | Code nav approach | PageRank + tree-sitter | Same algo, more mature | Sophon is a faithful Rust port |
+
+### LOCOMO across sample sizes (stability check)
+
+| Condition | N=15 | N=30 | N=40 | N=60 | **N=80** | 95 % CI (N=80) |
+|---|---:|---:|---:|---:|---:|---|
+| NONE | 20.0 % | — | 27.5 % | — | — | — |
+| COMP_HEUR | 26.7 % | 23.3 % | 27.5 % | 23.3 % | **23.8 %** | [15.8 – 34.1 %] |
+| **COMP_LLM (v0.3.0)** | — | **40.0 %** | — | **38.3 %** | **40.0 %** | **[30.0 – 51.0 %]** |
+| RETR_HASH | 60.0 % | 36.7 % | 42.5 % | 33.3 % | 32.5 % | [23.2 – 43.4 %] |
+| RETR_BGE | 60.0 % | 30.0 % | 32.5 % | 31.7 % | 33.8 % | [24.3 – 44.6 %] |
+| FULL | 73.3 % | 66.7 % | 75.0 % | 75.0 % | 71.2 % | [60.5 – 80.0 %] |
+
+**Lecture**:
+- N=15 numbers were optimistic (easy items). N=40/80 reveals true performance.
+- COMP_LLM is stable at ~40 % (v0.3.0's big finding — LLM summary > retrieval).
+- Multi-hop = 0 % across all Sophon conditions (see § 7.12).
+
+---
+
+## Navigation
+
+- **§ 1** [Module-level benchmarks](#1-module-benchmarks-synthetic-fixtures) — prompt/memory/fragment/delta token savings
+- **§ 2** [Cross-model benchmark](#2-cross-model-benchmark-3-claude--3-codex-profiles) — 3 Claude + 3 Codex × 3 tasks
+- **§ 3** [LOCOMO MC10](#3-locomo-mc10-benchmark-public-dataset) — multiple-choice N=100, historical reference
+- **§ 4** [Semantic retriever module](#4-semantic-retriever-module-the-retrieval-fix) — HashEmbedder + k-NN
+- **§ 5** [Output compressor](#5-output-compressor--compressing-command-stdoutstderr) — 20 command-aware filters
+- **§ 6** [Codebase navigator](#6-codebase-navigator--repo-map-without-reading-every-file) — tree-sitter + PageRank
+- **§ 7** [Public-repo benchmarks](#7-public-repo-benchmarks--codebase-navigator--output-compressor) — 5 GitHub repos SHA-pinned
+  - § 7.6 tree-sitter vs regex backend
+  - § 7.7 git-aware scoping
+  - § 7.8 v0.2 post-upgrade reruns (rayon, ignore, BGE, LLMLingua-2, mem0-lite)
+  - § 7.9 BGE vs HashEmbedder
+  - § 7.10 v0.2.1 all-conditions N=15
+  - § 7.11 N=40 scale-up correction
+  - **§ 7.12 v0.3.0 five fixes, N=30/60/80 stability** ← **latest**
+
+**Historical corrections** (we publish our losses as loudly as our wins):
+1. [N=30 → N=60 LOCOMO retriever](#37-locomo-open-ended-retrieval-n60): +23 pts → +13 pts
+2. [N=15 → N=40 RETR_HASH](#711-n40-scale-up--harder-items-more-honest-numbers): 60 % → 42.5 %
+3. [N=80 final finding](#712-five-pipeline-fixes--n306080-multi-scale-validation): retriever does NOT beat LLM summary (inverts v0.2 assumption)
 
 ---
 

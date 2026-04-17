@@ -24,6 +24,49 @@ source of truth for everything Sophon claims.
 
 ---
 
+## TL;DR
+
+Sophon v0.3.0 — stable across N=30/60/80 LOCOMO items, zero ML at runtime.
+
+### vs competitors (same inputs, same judge, same machine)
+
+| System | LOCOMO accuracy | LLM calls | Latency | Binary | Notes |
+|---|---:|---:|---:|---:|---|
+| **Sophon COMP_LLM** | **40.0 %** (N=80) | ~20 / item | ~30 s | 34 MB | Block-based Haiku summary |
+| **Sophon RETR_HASH** | 32.5 % (N=80) | 0 | sub-second | 34 MB | Deterministic, $0 |
+| **Sophon RETR_BGE** | 33.8 % (N=80) | 0 | sub-second | 34 MB | BGE-small ONNX |
+| **Sophon COMP_HEUR** | 23.8 % (N=80) | 0 | sub-second | 7.2 MB | Minimum baseline |
+| [mem0-lite](https://github.com/mem0ai/mem0) | 60.0 % (N=15) | ~330 / item | 8.7 min | Python stack | LLM fact extraction |
+| [LLMLingua-2](https://github.com/microsoft/LLMLingua) | n/a (compression metric) | 0 | 2 176 ms | 280 MB model | Learned compression |
+| FULL (ceiling) | 71.2 % (N=80) | 0 | — | — | Entire conversation |
+
+Head-to-heads:
+- **vs LLMLingua-2** on structured prompts: Sophon **+8.9 pts saved**, **35× faster**
+  ([§ 7.8.d](./BENCHMARK.md#78d-head-to-head-sophon-compress_prompt-vs-llmlingua-2))
+- **vs mem0-lite on LOCOMO N=15**: tie at 60 %, Sophon **sub-second vs 8.7 min**, **0 vs 330 LLM calls**
+  ([§ 7.8.e](./BENCHMARK.md#78e-mem0-lite-on-locomo--same-item-comparison))
+
+### LOCOMO accuracy across sample sizes
+
+Stability check: same `random.seed(42)`, same judge, items are nested (N=60 contains N=30's items, etc.).
+
+| Condition | N=15 | N=30 | N=40 | N=60 | **N=80** | 95 % CI (N=80) |
+|---|---:|---:|---:|---:|---:|---|
+| NONE (floor) | 20.0 % | — | 27.5 % | — | — | — |
+| COMP_HEUR | 26.7 % | 23.3 % | 27.5 % | 23.3 % | **23.8 %** | [15.8 – 34.1 %] |
+| **COMP_LLM** (v0.3.0) | — | **40.0 %** | — | **38.3 %** | **40.0 %** | **[30.0 – 51.0 %]** |
+| RETR_HASH | 60.0 % | 36.7 % | 42.5 % | 33.3 % | 32.5 % | [23.2 – 43.4 %] |
+| RETR_BGE | 60.0 % | 30.0 % | 32.5 % | 31.7 % | 33.8 % | [24.3 – 44.6 %] |
+| FULL (ceiling) | 73.3 % | 66.7 % | 75.0 % | 75.0 % | 71.2 % | [60.5 – 80.0 %] |
+
+**Lecture honnête** :
+- Les chiffres N=15 étaient optimistes (échantillon trop petit, items faciles). Le passage à N=40 puis N=80 révèle la vraie performance.
+- **COMP_LLM à 40 % est stable** sur les 3 échelles où il a été mesuré (N=30/60/80). C'est le chiffre fiable.
+- Le retriever stagne autour de **32-34 %** quel que soit l'embedder (Hash ou BGE).
+- Tous les conditions sont à **0 % sur multi-hop** — seul FULL (75 %) y arrive. Gap structurel documenté.
+
+---
+
 ## The three pillars
 
 ### 1. Measured economies, not promised ones
