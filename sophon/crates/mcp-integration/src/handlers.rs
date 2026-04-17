@@ -194,7 +194,32 @@ pub fn handle_tool_call(
                 value["index"] = serde_json::to_value(&compressed.index)?;
             }
             if let Some(retrieval) = retrieval_value {
+                // Add a retrieval_confidence signal so the caller can adjust
+                // its prompt: "low" means the retrieved chunks are weakly
+                // relevant (all scores < 0.3) and the LLM should be told to
+                // say "Not answerable" rather than guess. This fixes the
+                // adversarial question failure mode from the N=40 bench.
+                let confidence = if let Some(chunks) = retrieval.get("chunks") {
+                    let scores: Vec<f32> = chunks
+                        .as_array()
+                        .unwrap_or(&vec![])
+                        .iter()
+                        .filter_map(|c| c.get("score").and_then(|s| s.as_f64()))
+                        .map(|s| s as f32)
+                        .collect();
+                    let max_score = scores.iter().copied().fold(0.0f32, f32::max);
+                    if max_score >= 0.5 {
+                        "high"
+                    } else if max_score >= 0.3 {
+                        "medium"
+                    } else {
+                        "low"
+                    }
+                } else {
+                    "none"
+                };
                 value["retrieved_chunks"] = retrieval;
+                value["retrieval_confidence"] = json!(confidence);
             }
             Ok(value)
         }

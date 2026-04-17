@@ -12,7 +12,7 @@
 
 use std::collections::HashSet;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Duration, Utc};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -56,6 +56,11 @@ pub struct ChunkConfig {
     pub overlap: usize,
     /// Extract fenced code blocks as their own chunks.
     pub extract_code: bool,
+    /// When true, detect topic boundaries between consecutive sentences
+    /// using Jaccard similarity on word sets. A boundary is inserted when
+    /// the Jaccard coefficient drops below 0.3, forcing a chunk break even
+    /// if the buffer is under `target_size`.
+    pub use_topic_splitting: bool,
 }
 
 impl Default for ChunkConfig {
@@ -65,6 +70,7 @@ impl Default for ChunkConfig {
             max_size: 256,
             overlap: 32,
             extract_code: true,
+            use_topic_splitting: false,
         }
     }
 }
@@ -106,7 +112,7 @@ pub fn chunk_messages(messages: &[ChunkInputMessage<'_>], config: &ChunkConfig) 
     let mut seen: HashSet<String> = HashSet::new();
 
     for msg in messages {
-        let mut prose = msg.content.to_string();
+        let mut prose = resolve_temporal_refs(msg.content, msg.timestamp);
 
         if config.extract_code {
             for code in CODE_BLOCK_RE.captures_iter(msg.content) {
@@ -124,8 +130,10 @@ pub fn chunk_messages(messages: &[ChunkInputMessage<'_>], config: &ChunkConfig) 
                     }
                 }
             }
-            // Strip the code blocks from the prose so they aren't re-chunked.
-            prose = CODE_BLOCK_RE.replace_all(msg.content, "").to_string();
+            // Strip the code blocks from the resolved prose so they aren't
+            // re-chunked. Use `&prose` (not `msg.content`) to preserve the
+            // temporal resolution from line 115.
+            prose = CODE_BLOCK_RE.replace_all(&prose, "").to_string();
         }
 
         if prose.trim().is_empty() {
@@ -133,6 +141,11 @@ pub fn chunk_messages(messages: &[ChunkInputMessage<'_>], config: &ChunkConfig) 
         }
 
         let sentences = split_sentences(&prose);
+        let topic_breaks = if config.use_topic_splitting {
+            detect_topic_breaks(&sentences)
+        } else {
+            HashSet::new()
+        };
         let prose_chunks = pack_sentences(
             &sentences,
             config,
@@ -140,6 +153,7 @@ pub fn chunk_messages(messages: &[ChunkInputMessage<'_>], config: &ChunkConfig) 
             msg.timestamp,
             msg.session_id,
             msg.role.to_chunk_type(),
+            &topic_breaks,
         );
 
         for chunk in prose_chunks {
@@ -198,6 +212,49 @@ fn split_sentences(text: &str) -> Vec<String> {
     out
 }
 
+/// Compute the word set for a sentence: lowercased, whitespace-split,
+/// with trailing/leading punctuation stripped so that "restaurants." and
+/// "restaurant" can still overlap.
+fn word_set(sentence: &str) -> HashSet<String> {
+    sentence
+        .split_whitespace()
+        .map(|w| {
+            w.trim_matches(|c: char| c.is_ascii_punctuation())
+                .to_lowercase()
+        })
+        .filter(|w| !w.is_empty())
+        .collect()
+}
+
+/// Jaccard similarity between two sets: |A ∩ B| / |A ∪ B|.
+fn jaccard(a: &HashSet<String>, b: &HashSet<String>) -> f64 {
+    if a.is_empty() && b.is_empty() {
+        return 1.0;
+    }
+    let intersection = a.intersection(b).count();
+    let union = a.union(b).count();
+    intersection as f64 / union as f64
+}
+
+/// Pre-pass: find indices where a topic boundary exists. An index `i` in the
+/// returned set means there is a topic break *before* sentence `i` — i.e.
+/// sentences `i-1` and `i` belong to different topics.
+fn detect_topic_breaks(sentences: &[String]) -> HashSet<usize> {
+    let mut breaks = HashSet::new();
+    if sentences.len() < 2 {
+        return breaks;
+    }
+    let mut prev_words = word_set(&sentences[0]);
+    for i in 1..sentences.len() {
+        let cur_words = word_set(&sentences[i]);
+        if jaccard(&prev_words, &cur_words) < 0.3 {
+            breaks.insert(i);
+        }
+        prev_words = cur_words;
+    }
+    breaks
+}
+
 fn pack_sentences(
     sentences: &[String],
     config: &ChunkConfig,
@@ -205,6 +262,7 @@ fn pack_sentences(
     timestamp: DateTime<Utc>,
     session_id: Option<&str>,
     chunk_type: ChunkType,
+    topic_breaks: &HashSet<usize>,
 ) -> Vec<Chunk> {
     let mut out = Vec::new();
     let mut buf: Vec<String> = Vec::new();
@@ -222,7 +280,7 @@ fn pack_sentences(
         *buf_tokens = 0;
     };
 
-    for sentence in sentences {
+    for (i, sentence) in sentences.iter().enumerate() {
         let s_tokens = count_tokens(sentence);
 
         // A single sentence longer than max_size: force-split on whitespace.
@@ -235,6 +293,11 @@ fn pack_sentences(
                 ));
             }
             continue;
+        }
+
+        // Topic break: flush the current buffer before starting the new topic.
+        if topic_breaks.contains(&i) && !buf.is_empty() {
+            flush(&mut buf, &mut buf_tokens, &mut out);
         }
 
         if buf_tokens + s_tokens > config.target_size && !buf.is_empty() {
@@ -365,6 +428,138 @@ pub fn chunk_id(content: &str) -> String {
     s
 }
 
+/// Resolve relative temporal references ("last week", "yesterday", etc.)
+/// to absolute dates based on the message's timestamp. Appends the
+/// resolved date in brackets after the original phrase so both forms
+/// are searchable: "last week [week of 2023-10-06]".
+///
+/// This fixes the N=40 temporal_reasoning failures where "last month"
+/// in a message dated 2023-10-13 should resolve to "September 2023"
+/// but the chunk stored the raw "last month" which didn't match
+/// date-oriented queries.
+fn resolve_temporal_refs(text: &str, timestamp: DateTime<Utc>) -> String {
+    static PATTERNS: Lazy<Vec<(Regex, Box<dyn Fn(DateTime<Utc>) -> String + Send + Sync>)>> =
+        Lazy::new(|| {
+            vec![
+                (
+                    Regex::new(r"(?i)\byesterday\b").unwrap(),
+                    Box::new(|ts: DateTime<Utc>| {
+                        let d = ts - Duration::days(1);
+                        format!("yesterday [{}]", d.format("%Y-%m-%d"))
+                    }) as Box<dyn Fn(DateTime<Utc>) -> String + Send + Sync>,
+                ),
+                (
+                    Regex::new(r"(?i)\blast week\b").unwrap(),
+                    Box::new(|ts: DateTime<Utc>| {
+                        let d = ts - Duration::weeks(1);
+                        format!("last week [week of {}]", d.format("%Y-%m-%d"))
+                    }),
+                ),
+                (
+                    Regex::new(r"(?i)\blast month\b").unwrap(),
+                    Box::new(|ts: DateTime<Utc>| {
+                        let d = ts - Duration::days(30);
+                        let month_names = [
+                            "",
+                            "January",
+                            "February",
+                            "March",
+                            "April",
+                            "May",
+                            "June",
+                            "July",
+                            "August",
+                            "September",
+                            "October",
+                            "November",
+                            "December",
+                        ];
+                        format!(
+                            "last month [{} {}]",
+                            month_names[d.month() as usize],
+                            d.year()
+                        )
+                    }),
+                ),
+                (
+                    Regex::new(r"(?i)\blast year\b").unwrap(),
+                    Box::new(|ts: DateTime<Utc>| format!("last year [{}]", ts.year() - 1)),
+                ),
+                (
+                    Regex::new(r"(?i)\bthis week\b").unwrap(),
+                    Box::new(|ts: DateTime<Utc>| {
+                        format!("this week [week of {}]", ts.format("%Y-%m-%d"))
+                    }),
+                ),
+                (
+                    Regex::new(r"(?i)\bthis month\b").unwrap(),
+                    Box::new(|ts: DateTime<Utc>| {
+                        let month_names = [
+                            "",
+                            "January",
+                            "February",
+                            "March",
+                            "April",
+                            "May",
+                            "June",
+                            "July",
+                            "August",
+                            "September",
+                            "October",
+                            "November",
+                            "December",
+                        ];
+                        format!(
+                            "this month [{} {}]",
+                            month_names[ts.month() as usize],
+                            ts.year()
+                        )
+                    }),
+                ),
+                (
+                    Regex::new(r"(?i)\btoday\b").unwrap(),
+                    Box::new(|ts: DateTime<Utc>| format!("today [{}]", ts.format("%Y-%m-%d"))),
+                ),
+                (
+                    Regex::new(r"(?i)\btomorrow\b").unwrap(),
+                    Box::new(|ts: DateTime<Utc>| {
+                        let d = ts + Duration::days(1);
+                        format!("tomorrow [{}]", d.format("%Y-%m-%d"))
+                    }),
+                ),
+                (
+                    Regex::new(r"(?i)\blast friday\b").unwrap(),
+                    Box::new(|ts: DateTime<Utc>| {
+                        // Walk back to the most recent Friday before ts
+                        let weekday = ts.weekday().num_days_from_monday(); // Mon=0..Sun=6
+                        let days_back = if weekday >= 4 {
+                            weekday - 4
+                        } else {
+                            weekday + 3
+                        };
+                        let d = ts - Duration::days(days_back as i64);
+                        format!("last Friday [{}]", d.format("%Y-%m-%d"))
+                    }),
+                ),
+                (
+                    Regex::new(r"(?i)\brecently\b").unwrap(),
+                    Box::new(|ts: DateTime<Utc>| {
+                        format!("recently [around {}]", ts.format("%Y-%m"))
+                    }),
+                ),
+            ]
+        });
+
+    let mut result = text.to_string();
+    for (re, resolver) in PATTERNS.iter() {
+        if re.is_match(&result) {
+            let resolved = resolver(timestamp);
+            result = re.replace_all(&result, resolved.as_str()).to_string();
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,6 +598,7 @@ mod tests {
             max_size: 40,
             overlap: 0,
             extract_code: true,
+            use_topic_splitting: false,
         };
         let big = (0..30)
             .map(|i| format!("This is sentence number {}.", i))
@@ -476,5 +672,60 @@ mod tests {
         );
         // Dedup by id means we only get one chunk back.
         assert_eq!(chunks.len(), 1);
+    }
+
+    #[test]
+    fn topic_coherent_text_stays_in_one_chunk() {
+        let cfg = ChunkConfig {
+            target_size: 256,
+            max_size: 512,
+            overlap: 0,
+            extract_code: false,
+            use_topic_splitting: true,
+        };
+        // All sentences share heavy keyword overlap so Jaccard stays >= 0.3.
+        let text = "I love Italian food and Italian restaurants. \
+                     Italian restaurants serve the best Italian food. \
+                     The best Italian food comes from Italian restaurants near my house.";
+        let chunks = chunk_messages(&[msg(0, ChunkInputRole::User, text)], &cfg);
+        assert_eq!(
+            chunks.len(),
+            1,
+            "topic-coherent sentences should stay in one chunk, got {}",
+            chunks.len()
+        );
+        assert!(chunks[0].content.contains("Italian"));
+    }
+
+    #[test]
+    fn distinct_topics_split_into_separate_chunks() {
+        let cfg = ChunkConfig {
+            // Large target so token limit alone wouldn't cause a split.
+            target_size: 512,
+            max_size: 1024,
+            overlap: 0,
+            extract_code: false,
+            use_topic_splitting: true,
+        };
+        // Two clearly distinct topics with zero keyword overlap.
+        let text = "I love Italian restaurants. Italian food is the best cuisine. \
+                     The weather forecast predicts heavy rain tomorrow. \
+                     Thunderstorms are expected throughout the weekend.";
+        let chunks = chunk_messages(&[msg(0, ChunkInputRole::User, text)], &cfg);
+        assert!(
+            chunks.len() >= 2,
+            "distinct topics should split into at least 2 chunks, got {}",
+            chunks.len()
+        );
+        // First chunk should be about food, second about weather.
+        assert!(
+            chunks[0].content.contains("Italian"),
+            "first chunk should contain the restaurant topic"
+        );
+        assert!(
+            chunks.last().unwrap().content.contains("rain")
+                || chunks.last().unwrap().content.contains("Thunderstorms"),
+            "last chunk should contain the weather topic"
+        );
     }
 }

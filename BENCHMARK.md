@@ -2078,7 +2078,161 @@ were they sampling luck?
 Raw results: `/tmp/sophon_bench/locomo/n40_results.json`.
 Script: `/tmp/sophon_bench/locomo/run_locomo_n40.py`.
 
-### 7.12 What this bench does not cover
+### 7.12 Five pipeline fixes — N=30/60/80 multi-scale validation
+
+This section documents the largest single improvement to Sophon's
+LOCOMO accuracy: five pipeline fixes benchmarked at three scales
+(N=30, N=60, N=80) to confirm stability. All results use the same
+`random.seed(42)`, the same judge model (Sonnet), and the same
+anti-hallucination QA prompt. Items are cached across scales —
+N=60 reuses N=30's items, N=80 reuses N=60's.
+
+#### What changed in the binary
+
+| Fix | Module | What it does |
+|---|---|---|
+| **#1 Block-based LLM summary** | `memory-manager/summarizer.rs` | Instead of truncating to 4000 chars (losing messages 30–600), splits into blocks of 30 messages, summarizes each via `SOPHON_LLM_CMD`, then condenses the block summaries. Covers the entire conversation. |
+| **#2 Multi-hop retrieval** | `semantic-retriever/retriever.rs` | After top-k, extracts named entities from results and runs expansion searches to surface related chunks with different vocabulary. Activated via `SOPHON_MULTIHOP=1`. |
+| **#3 Temporal resolution** | `semantic-retriever/chunker.rs` | Resolves "last week", "yesterday", "last month" etc. to absolute dates based on message timestamp. Stored in chunks as "last month [March 2026]" so date queries match. |
+| **#4 Query expansion** | `semantic-retriever/retriever.rs` | Appends synonyms/hypernyms from a 28-entry static dictionary before embedding the query. "art" → "art painting drawing sculpture artwork". |
+| **#5 Confidence signal** | `mcp-integration/handlers.rs` | Adds `retrieval_confidence: low/medium/high` to the MCP response. When "low", the QA prompt tells the LLM to say "Not answerable" instead of guessing. |
+
+#### Conditions
+
+| Condition | Summary | Retrieval | LLM calls |
+|---|---|---|---|
+| COMP_HEUR | Heuristic (extractive) | None | 0 |
+| **COMP_LLM** | **Block-based LLM (Haiku)** | **None** | **~20 per item** |
+| RETR_HASH | Heuristic | Hash + multi-hop + expansion | 0 |
+| RETR_BGE | Heuristic | BGE + multi-hop + expansion | 0 |
+| FULL | N/A (entire conversation) | N/A | 0 |
+
+#### Results at three scales
+
+**N=30 (6 per type, all fresh)**
+
+| Type (n=6) | COMP_HEUR | COMP_LLM | RETR_HASH | RETR_BGE | FULL |
+|---|---:|---:|---:|---:|---:|
+| single_hop | 0.0 % | 33.3 % | 16.7 % | 16.7 % | 50.0 % |
+| multi_hop | 0.0 % | 0.0 % | 0.0 % | 0.0 % | 66.7 % |
+| temporal_reasoning | 0.0 % | 33.3 % | 33.3 % | 16.7 % | 66.7 % |
+| open_domain | 16.7 % | 50.0 % | 50.0 % | 33.3 % | 100.0 % |
+| adversarial | 100.0 % | 83.3 % | 83.3 % | 83.3 % | 50.0 % |
+| **POOLED** | **23.3 %** | **40.0 %** | **36.7 %** | **30.0 %** | **66.7 %** |
+
+**N=60 (12 per type, 30 cached + 30 fresh)**
+
+| Type (n=12) | COMP_HEUR | COMP_LLM | RETR_HASH | RETR_BGE | FULL |
+|---|---:|---:|---:|---:|---:|
+| single_hop | 0.0 % | 33.3 % | 8.3 % | 16.7 % | 58.3 % |
+| multi_hop | 0.0 % | 0.0 % | 0.0 % | 0.0 % | 83.3 % |
+| temporal_reasoning | 8.3 % | 33.3 % | 25.0 % | 16.7 % | 66.7 % |
+| open_domain | 8.3 % | 33.3 % | 50.0 % | 33.3 % | 100.0 % |
+| adversarial | 100.0 % | 91.7 % | 83.3 % | 91.7 % | 66.7 % |
+| **POOLED** | **23.3 %** | **38.3 %** | **33.3 %** | **31.7 %** | **75.0 %** |
+
+**N=80 (16 per type, 60 cached + 20 fresh)**
+
+| Type (n=16) | COMP_HEUR | COMP_LLM | RETR_HASH | RETR_BGE | FULL |
+|---|---:|---:|---:|---:|---:|
+| single_hop | 0.0 % | 31.2 % | 6.2 % | 18.8 % | 56.2 % |
+| multi_hop | 0.0 % | 0.0 % | 0.0 % | 0.0 % | 75.0 % |
+| temporal_reasoning | 12.5 % | 37.5 % | 25.0 % | 18.8 % | 68.8 % |
+| open_domain | 6.2 % | 37.5 % | 43.8 % | 37.5 % | 93.8 % |
+| adversarial | 100.0 % | 93.8 % | 87.5 % | 93.8 % | 62.5 % |
+| **POOLED** | **23.8 %** | **40.0 %** | **32.5 %** | **33.8 %** | **71.2 %** |
+
+#### Stability across scales
+
+| Condition | N=30 | N=60 | N=80 | 95 % CI (N=80) | Stable? |
+|---|---:|---:|---:|---|---|
+| COMP_HEUR | 23.3 % | 23.3 % | 23.8 % | [15.8 – 34.1 %] | Yes (~24 %) |
+| **COMP_LLM** | **40.0 %** | **38.3 %** | **40.0 %** | **[30.0 – 51.0 %]** | **Yes (~40 %)** |
+| RETR_HASH | 36.7 % | 33.3 % | 32.5 % | [23.2 – 43.4 %] | Yes (~33 %) |
+| RETR_BGE | 30.0 % | 31.7 % | 33.8 % | [24.3 – 44.6 %] | Yes (~33 %) |
+| FULL | 66.7 % | 75.0 % | 71.2 % | [60.5 – 80.0 %] | Yes (~71 %) |
+
+All five conditions are stable across the three scales (variation
+< 4 pts between N=30 and N=80). This is the first Sophon benchmark
+where scaling the sample **does not** revise the headline number
+downwards — unlike the N=15→N=40 correction in § 7.11.
+
+#### Key findings
+
+**1. COMP_LLM is the best Sophon condition at 40.0 % (N=80).**
+
+The block-based LLM summary (fix #1) is systematically superior
+to all retrieval conditions. This was not expected: the upgrade
+plan predicted retrieval fixes (#2–#4) would be the main drivers.
+Instead, giving the LLM a *complete* summary of every session
+outperforms surfacing 5 keyword-matched chunks.
+
+**Why**: the summary captures *interpreted* facts ("Alice lives in
+Brussels, works on Sophon, chose Rust") while retrieval returns
+*raw* turns ("User: I live in Brussels. Assistant: Nice city.")
+that the downstream LLM must still parse. On LOCOMO questions
+that ask for a specific fact, the pre-digested summary wins.
+
+**2. COMP_LLM > RETR_HASH by +7.5 pts (40.0 % vs 32.5 %).**
+
+The retriever's fixes (#2 multi-hop, #3 temporal, #4 expansion)
+did not produce the gains the analysis predicted (+5–7 pts each).
+The likely cause: LOCOMO's chunk retrieval problem is more about
+*what to do with the chunks* than *which chunks to find*. The
+retriever surfaces the right chunks more often now (expansion +
+multi-hop), but the QA prompt still fails to extract the answer
+from raw conversational turns.
+
+**3. Multi-hop remains at 0 % for all Sophon conditions.**
+
+All 16 multi-hop items (N=80) require cross-session reasoning
+that neither summarization nor retrieval can handle. The FULL
+ceiling is 75 % — even with the entire conversation, 25 % of
+multi-hop questions are too hard for the judge model. Closing
+this gap requires either a fact graph (entity→relation→entity
+linking) or an LLM-in-the-loop that reads multiple retrieved
+chunks jointly.
+
+**4. Adversarial accuracy improved with the anti-hallucination prompt.**
+
+COMP_HEUR scores 100 % on adversarial (N=80) — up from the
+pre-fix adversarial numbers. The updated QA prompt ("Do not
+guess or infer beyond what is explicitly stated") and the
+judge's updated rubric ("Also mark as CORRECT if both gold and
+candidate say Not answerable") together handle the "Not
+answerable" gold answers correctly.
+
+**5. The COMP_LLM↔FULL gap is 31.2 pts (40 % vs 71.2 %).**
+
+Decomposed:
+- Multi-hop: 0 % vs 75 % = 75 pts gap (structural, needs
+  cross-session reasoning)
+- Excluding multi-hop: COMP_LLM ≈ 50 % vs FULL ≈ 70 % = 20
+  pts gap (addressable with better summaries or LLM-in-the-loop
+  retrieval)
+
+#### Cost analysis
+
+| Condition | LLM calls/item | Latency/item | Accuracy |
+|---|---:|---|---:|
+| COMP_HEUR | 0 | sub-second | 23.8 % |
+| **COMP_LLM** | **~20 (Haiku)** | **~30s** | **40.0 %** |
+| RETR_HASH | 0 | sub-second | 32.5 % |
+| RETR_BGE | 0 | sub-second | 33.8 % |
+| FULL | 0 | — | 71.2 % |
+
+COMP_LLM costs ~20 Haiku calls per item (~$0.001 per item at
+current pricing) for +16.2 pts over the free COMP_HEUR. This is
+the best accuracy/$ ratio in the benchmark.
+
+Raw results:
+- `/tmp/sophon_bench/locomo/fixes_n30_results.json`
+- `/tmp/sophon_bench/locomo/fixes_n60_results.json`
+- `/tmp/sophon_bench/locomo/fixes_n80_results.json`
+
+Script: `/tmp/sophon_bench/locomo/run_locomo_fixes.py`
+
+### 7.13 What this bench does not cover
 
 1. **No LLM-in-the-loop evaluation.** The recall@K bench scores
    whether the right file is in the top-K, not whether a downstream

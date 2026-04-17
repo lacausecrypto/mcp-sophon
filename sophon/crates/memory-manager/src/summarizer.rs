@@ -79,7 +79,25 @@ pub fn compress_history(messages: &[Message], config: &MemoryConfig) -> Compress
     let (older, recent) = messages.split_at(split_idx);
 
     let stable_facts = extract_facts(messages);
-    let summary = if messages.len() < config.compression_threshold {
+    // Activate LLM summarization if either the config flag is set OR the
+    // SOPHON_LLM_CMD env var is present (implicit opt-in — you wouldn't
+    // set the command without wanting to use it).
+    let use_llm = config.use_llm_summarization || std::env::var("SOPHON_LLM_CMD").is_ok();
+    let summary = if use_llm {
+        let target = if messages.len() < config.compression_threshold {
+            messages
+        } else {
+            older
+        };
+        llm_summarize(target).unwrap_or_else(|| {
+            // Fallback to heuristic if LLM call fails
+            if messages.len() < config.compression_threshold {
+                summarize_recent(messages)
+            } else {
+                heuristic_summarize(older)
+            }
+        })
+    } else if messages.len() < config.compression_threshold {
         summarize_recent(messages)
     } else {
         heuristic_summarize(older)
@@ -190,6 +208,156 @@ fn first_sentence(content: &str) -> String {
         .chars()
         .take(200)
         .collect()
+}
+
+/// LLM-backed abstractive summarization. Shells out to the command in
+/// `SOPHON_LLM_CMD` (default: `claude -p --model haiku`). Returns
+/// `None` on any failure so the caller can fall back to the heuristic.
+///
+/// **Block-based approach** (v0.2.2): instead of truncating the
+/// conversation to 4000 chars (which loses everything after message
+/// ~25), we:
+///
+/// 1. Split messages into blocks of `BLOCK_SIZE` (30 messages each).
+/// 2. Summarize each block independently via the LLM (~50-80 words
+///    per block summary).
+/// 3. If total summaries exceed `MAX_SUMMARY_CHARS`, run a second
+///    "summarize the summaries" pass to condense further.
+///
+/// This ensures every message in a 600-turn conversation contributes
+/// to the final summary — the root cause of the N=40 COMP_LLM gap
+/// (messages 30-600 were invisible with the old 4000-char truncation).
+fn llm_summarize(messages: &[Message]) -> Option<String> {
+    const BLOCK_SIZE: usize = 30;
+    const MAX_SUMMARY_CHARS: usize = 3000;
+
+    if messages.is_empty() {
+        return None;
+    }
+
+    // Short conversations: single-pass (no need for blocks)
+    if messages.len() <= BLOCK_SIZE {
+        return llm_call(&format_transcript(messages), false);
+    }
+
+    // Split into blocks and summarize each
+    let blocks: Vec<&[Message]> = messages.chunks(BLOCK_SIZE).collect();
+    let mut block_summaries: Vec<String> = Vec::with_capacity(blocks.len());
+
+    for (i, block) in blocks.iter().enumerate() {
+        let transcript = format_transcript(block);
+        match llm_call(&transcript, false) {
+            Some(summary) => {
+                block_summaries.push(format!("[Block {}/{}] {}", i + 1, blocks.len(), summary))
+            }
+            None => {
+                // If one block fails, use heuristic for that block
+                block_summaries.push(format!(
+                    "[Block {}/{}] {}",
+                    i + 1,
+                    blocks.len(),
+                    heuristic_summarize(block)
+                ));
+            }
+        }
+    }
+
+    let combined = block_summaries.join("\n\n");
+
+    // If combined summaries are short enough, use as-is
+    if combined.len() <= MAX_SUMMARY_CHARS {
+        return Some(combined);
+    }
+
+    // Second pass: summarize the summaries
+    llm_call(&combined, true).or(Some(
+        // Fallback: truncate to max chars if meta-summary fails
+        combined.chars().take(MAX_SUMMARY_CHARS).collect(),
+    ))
+}
+
+/// Format messages into a transcript string for the LLM prompt.
+fn format_transcript(messages: &[Message]) -> String {
+    let mut transcript = String::with_capacity(messages.len() * 100);
+    for msg in messages {
+        let role_tag = match msg.role {
+            Role::User => "User",
+            Role::Assistant => "Assistant",
+            Role::System => "System",
+        };
+        transcript.push_str(&format!("{}: {}\n", role_tag, &msg.content));
+    }
+    transcript
+}
+
+/// Execute a single LLM call. `is_meta` controls whether the prompt
+/// asks to summarize raw conversation or to condense existing summaries.
+fn llm_call(content: &str, is_meta: bool) -> Option<String> {
+    use std::process::Command;
+
+    let cmd_str =
+        std::env::var("SOPHON_LLM_CMD").unwrap_or_else(|_| "claude -p --model haiku".to_string());
+
+    let prompt = if is_meta {
+        format!(
+            "You are condensing multiple conversation summaries into one coherent summary.\n\
+             Merge the facts below into a single paragraph. Preserve all names, dates,\n\
+             locations, decisions, and preferences. Remove redundancy. Max 200 words.\n\n\
+             SUMMARIES:\n{}\n\nCONDENSED SUMMARY:",
+            content
+        )
+    } else {
+        format!(
+            "Summarize this conversation segment in a compact paragraph. Focus on:\n\
+             - Names, dates, locations mentioned\n\
+             - Decisions made and preferences stated\n\
+             - Key questions asked and answers given\n\
+             - Projects or topics discussed\n\
+             Skip small talk. Keep each fact self-contained. Max 100 words.\n\n\
+             CONVERSATION:\n{}\n\nSUMMARY:",
+            content
+        )
+    };
+
+    let parts: Vec<&str> = cmd_str.split_whitespace().collect();
+    if parts.is_empty() {
+        return None;
+    }
+
+    let output = Command::new(parts[0])
+        .args(&parts[1..])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()
+        .and_then(|mut child| {
+            use std::io::Write;
+            if let Some(ref mut stdin) = child.stdin {
+                let _ = stdin.write_all(prompt.as_bytes());
+            }
+            child.wait_with_output().ok()
+        })?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if raw.is_empty() {
+        return None;
+    }
+
+    // Handle JSON output (e.g. claude --output-format json)
+    if raw.starts_with('{') {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(result) = v.get("result").and_then(|r| r.as_str()) {
+                return Some(result.to_string());
+            }
+        }
+    }
+
+    Some(raw)
 }
 
 fn summarize_recent(messages: &[Message]) -> String {

@@ -11,34 +11,75 @@ struct FactPattern {
 
 static FACT_PATTERNS: Lazy<Vec<FactPattern>> = Lazy::new(|| {
     vec![
+        // ---- Identity ----
         FactPattern {
-            regex: Regex::new(r"(?i)my name is ([A-Za-z][\w-]*)").expect("valid regex"),
+            regex: Regex::new(r"(?i)my name is ([A-Za-z][\w\s-]{0,40})").expect("valid regex"),
             category: FactCategory::UserIdentity,
             template: "User's name is {1}",
         },
         FactPattern {
-            regex: Regex::new(r"(?i)i(?:'m| am) (?:a |an )?([A-Za-z][\w\s]{1,40})")
+            regex: Regex::new(r"(?i)i(?:'m| am) (?:a |an )?([A-Za-z][\w\s]{1,60})")
                 .expect("valid regex"),
             category: FactCategory::UserIdentity,
             template: "User is {1}",
         },
         FactPattern {
-            regex: Regex::new(r"(?i)(?:working on|building|creating) (?:a |an )?(.+?)(?:\.|$)")
+            regex: Regex::new(r"(?i)i (?:live|moved|relocated) (?:in|to) ([A-Za-z][\w\s,]{1,60})")
+                .expect("valid regex"),
+            category: FactCategory::UserIdentity,
+            template: "User lives in {1}",
+        },
+        FactPattern {
+            regex: Regex::new(r"(?i)i(?:'m| am) (\d{1,3}) years? old").expect("valid regex"),
+            category: FactCategory::UserIdentity,
+            template: "User is {1} years old",
+        },
+        // ---- Project context ----
+        FactPattern {
+            regex: Regex::new(r"(?i)(?:working on|building|creating|developing|maintaining) (?:a |an |the )?(.+?)(?:\.|,|$)")
                 .expect("valid regex"),
             category: FactCategory::ProjectContext,
             template: "Working on: {1}",
         },
         FactPattern {
-            regex: Regex::new(r"(?i)(?:using|chose|decided on|going with) ([A-Za-z][\w\s]{1,40})")
+            regex: Regex::new(r"(?i)(?:the|our|my) (?:project|app|service|tool|system) (?:is called|is named|name is) ([A-Za-z][\w\s-]{1,40})")
+                .expect("valid regex"),
+            category: FactCategory::ProjectContext,
+            template: "Project name: {1}",
+        },
+        // ---- Technical decisions ----
+        FactPattern {
+            regex: Regex::new(r"(?i)(?:using|chose|decided on|going with|switched to|migrated to) ([A-Za-z][\w\s.+-]{1,60})")
                 .expect("valid regex"),
             category: FactCategory::TechnicalDecision,
             template: "Using {1}",
         },
         FactPattern {
-            regex: Regex::new(r"(?i)(?:always|never|please|don't) (.+?)(?:\.|$)")
+            regex: Regex::new(r"(?i)(?:i |we )prefer ([A-Za-z][\w\s]{1,40})")
+                .expect("valid regex"),
+            category: FactCategory::TechnicalDecision,
+            template: "Preference: {1}",
+        },
+        // ---- Instructions ----
+        FactPattern {
+            regex: Regex::new(r"(?i)(?:always|never|please|don't|do not|make sure to) (.+?)(?:\.|!|$)")
                 .expect("valid regex"),
             category: FactCategory::Instruction,
             template: "Instruction: {0}",
+        },
+        // ---- Dates & events ----
+        FactPattern {
+            regex: Regex::new(r"(?i)(?:deadline|due date|due by|by|on|scheduled for) (?:is )?(\w+ \d{1,2}(?:st|nd|rd|th)?(?:,? \d{4})?)")
+                .expect("valid regex"),
+            category: FactCategory::Constraint,
+            template: "Date: {0}",
+        },
+        // ---- Relationships ----
+        FactPattern {
+            regex: Regex::new(r"(?i)(?:my |our )(?:friend|colleague|partner|wife|husband|brother|sister|boss|manager|team) ([A-Za-z][\w\s]{1,30})")
+                .expect("valid regex"),
+            category: FactCategory::UserIdentity,
+            template: "Relationship: {0}",
         },
     ]
 });

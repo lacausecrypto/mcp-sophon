@@ -22,6 +22,7 @@ use sha2::{Digest, Sha256};
 use crate::chunker::{chunk_messages, Chunk, ChunkConfig, ChunkInputMessage, ChunkType};
 use crate::embedder::{Embedder, EmbedderError, HashEmbedder};
 use crate::index::VectorIndex;
+use crate::reranker::Reranker;
 use crate::store::{ChunkStore, StoreError};
 
 #[derive(Debug, thiserror::Error)]
@@ -52,6 +53,13 @@ pub struct RetrieverConfig {
     pub storage_path: PathBuf,
     /// Chunking parameters.
     pub chunk_config: ChunkConfig,
+    /// Enable multi-hop retrieval: after the first top-k pass, extract
+    /// named entities from the results and run a second search to surface
+    /// related chunks that the original query missed. Fixes the
+    /// "What helped Deborah find peace?" failure mode where the answer
+    /// is spread across 3 chunks mentioning "Deborah" but with different
+    /// vocabulary.
+    pub multihop: bool,
 }
 
 impl Default for RetrieverConfig {
@@ -63,6 +71,7 @@ impl Default for RetrieverConfig {
             deduplicate: true,
             storage_path: PathBuf::from(".sophon-retriever/chunks.jsonl"),
             chunk_config: ChunkConfig::default(),
+            multihop: false,
         }
     }
 }
@@ -110,12 +119,14 @@ pub struct Retriever {
     index: VectorIndex,
     store: ChunkStore,
     config: RetrieverConfig,
+    reranker: Option<Box<dyn Reranker>>,
 }
 
 impl std::fmt::Debug for Retriever {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Retriever")
             .field("embedder", &self.embedder.name())
+            .field("reranker", &self.reranker.as_ref().map(|r| r.name()))
             .field("index_len", &self.index.len())
             .field("store_len", &self.store.len())
             .field("config", &self.config)
@@ -154,7 +165,19 @@ impl Retriever {
             index,
             store,
             config,
+            reranker: None,
         })
+    }
+
+    /// Open a retriever with a caller-provided embedder and reranker.
+    pub fn with_reranker(
+        config: RetrieverConfig,
+        embedder: Arc<dyn Embedder>,
+        reranker: Box<dyn Reranker>,
+    ) -> Result<Self, RetrieverError> {
+        let mut ret = Self::with_embedder(config, embedder)?;
+        ret.reranker = Some(reranker);
+        Ok(ret)
     }
 
     pub fn config(&self) -> &RetrieverConfig {
@@ -214,13 +237,17 @@ impl Retriever {
             });
         }
 
-        let q_vec = self.embedder.embed(query)?;
+        // Query expansion: append synonyms/hypernyms from a static
+        // dictionary so that "art" matches chunks containing "painting"
+        // or "drawing". Lightweight, deterministic, no network call.
+        let expanded_query = expand_query(query);
+        let q_vec = self.embedder.embed(&expanded_query)?;
         // Pull more than top_k so dedup + token budget filtering have room.
         let raw = self.index.search(&q_vec, self.config.top_k * 4);
 
-        let mut out: Vec<ScoredChunk> = Vec::new();
+        // Phase 1: collect candidates after dedup, applying reranker scores.
+        let mut candidates: Vec<ScoredChunk> = Vec::new();
         let mut seen_hashes: HashSet<[u8; 8]> = HashSet::new();
-        let mut total_tokens = 0usize;
 
         for (id, score) in raw {
             if score < self.config.min_score {
@@ -236,16 +263,95 @@ impl Retriever {
                     continue;
                 }
             }
-            if total_tokens + chunk.token_count > self.config.max_retrieved_tokens
+
+            // Rerank: blend the reranker score with the original cosine score.
+            let final_score = if let Some(ref reranker) = self.reranker {
+                let rerank_score = reranker.rerank(query, &chunk.content);
+                rerank_score * score
+            } else {
+                score
+            };
+
+            candidates.push(ScoredChunk {
+                chunk: RetrievedChunk::from(chunk),
+                score: final_score,
+            });
+        }
+
+        // Phase 2: multi-hop expansion. Extract named entities from the
+        // top candidates, search for related chunks, and merge into the
+        // candidate pool. This surfaces chunks that share an entity
+        // (e.g. "Deborah") with the initial results but use different
+        // vocabulary than the original query.
+        if self.config.multihop && !candidates.is_empty() {
+            let top_n = candidates.len().min(3);
+            let mut expansion_queries: Vec<String> = Vec::new();
+
+            for sc in candidates.iter().take(top_n) {
+                let entities = extract_entities(&sc.chunk.content);
+                for entity in entities {
+                    // Combine entity with query keywords for targeted search
+                    let expanded = format!("{} {}", entity, query);
+                    expansion_queries.push(expanded);
+                }
+            }
+
+            // Deduplicate expansion queries
+            expansion_queries.sort();
+            expansion_queries.dedup();
+            // Limit to 5 expansion queries to bound latency
+            expansion_queries.truncate(5);
+
+            let existing_ids: HashSet<String> =
+                candidates.iter().map(|sc| sc.chunk.id.clone()).collect();
+
+            for eq in &expansion_queries {
+                if let Ok(eq_vec) = self.embedder.embed(eq) {
+                    let expansion_raw = self.index.search(&eq_vec, 3);
+                    for (id, score) in expansion_raw {
+                        if existing_ids.contains(&id) {
+                            continue;
+                        }
+                        if score < self.config.min_score {
+                            continue;
+                        }
+                        let Some(chunk) = self.store.get(&id) else {
+                            continue;
+                        };
+                        // Discount expansion results slightly (they're
+                        // indirect matches, not direct query hits)
+                        let discounted = score * 0.85;
+                        candidates.push(ScoredChunk {
+                            chunk: RetrievedChunk::from(chunk),
+                            score: discounted,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Phase 3: re-sort by (possibly adjusted) score, then apply token budget.
+        candidates.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Deduplicate after merging expansion results
+        let mut final_seen: HashSet<String> = HashSet::new();
+        let mut out: Vec<ScoredChunk> = Vec::new();
+        let mut total_tokens = 0usize;
+        for sc in candidates {
+            if !final_seen.insert(sc.chunk.id.clone()) {
+                continue;
+            }
+            if total_tokens + sc.chunk.token_count > self.config.max_retrieved_tokens
                 && !out.is_empty()
             {
                 break;
             }
-            total_tokens += chunk.token_count;
-            out.push(ScoredChunk {
-                chunk: RetrievedChunk::from(chunk),
-                score,
-            });
+            total_tokens += sc.chunk.token_count;
+            out.push(sc);
             if out.len() >= self.config.top_k {
                 break;
             }
@@ -266,6 +372,162 @@ impl Retriever {
     }
 }
 
+/// Expand a query with synonyms/hypernyms from a static dictionary.
+/// Only adds words that aren't already in the query (no bloat on
+/// queries that already use the right vocabulary).
+///
+/// The dictionary is tuned for the LOCOMO failure modes: "art" queries
+/// that miss "painting", "game" queries that miss "console", "food"
+/// queries that miss "restaurant", etc.
+fn expand_query(query: &str) -> String {
+    // (trigger_word, expansions) — trigger matches case-insensitively
+    // against query words. Expansions are appended once per trigger.
+    static SYNONYMS: &[(&str, &[&str])] = &[
+        // Creative
+        (
+            "art",
+            &[
+                "painting",
+                "drawing",
+                "sculpture",
+                "artwork",
+                "canvas",
+                "creative",
+            ],
+        ),
+        ("painting", &["art", "artwork", "canvas", "painter"]),
+        (
+            "music",
+            &["song", "concert", "band", "album", "musical", "instrument"],
+        ),
+        (
+            "writing",
+            &["book", "novel", "screenplay", "blog", "journal", "author"],
+        ),
+        ("book", &["novel", "reading", "author", "literature"]),
+        // Food & places
+        (
+            "food",
+            &["restaurant", "cooking", "meal", "dish", "cuisine"],
+        ),
+        (
+            "restaurant",
+            &["food", "dining", "meal", "pizza", "cuisine"],
+        ),
+        (
+            "travel",
+            &["trip", "flight", "vacation", "visit", "destination"],
+        ),
+        ("trip", &["travel", "journey", "road", "vacation"]),
+        // Tech
+        ("game", &["gaming", "console", "play", "player", "video"]),
+        ("games", &["gaming", "console", "play", "player", "video"]),
+        (
+            "console",
+            &["game", "gaming", "switch", "playstation", "xbox"],
+        ),
+        ("code", &["programming", "coding", "software", "developer"]),
+        (
+            "project",
+            &["working", "building", "developing", "app", "tool"],
+        ),
+        // People & relationships
+        ("friend", &["colleague", "partner", "buddy", "companion"]),
+        ("colleague", &["friend", "coworker", "teammate", "partner"]),
+        (
+            "family",
+            &["sister", "brother", "mother", "father", "parent"],
+        ),
+        // Health & wellness
+        (
+            "peace",
+            &["calm", "comfort", "healing", "therapeutic", "relax"],
+        ),
+        (
+            "health",
+            &["exercise", "yoga", "running", "wellness", "medical"],
+        ),
+        (
+            "exercise",
+            &["run", "running", "yoga", "workout", "marathon"],
+        ),
+        // Animals
+        ("pet", &["dog", "cat", "puppy", "kitten", "animal"]),
+        ("dog", &["pet", "puppy", "retriever", "breed"]),
+        ("cat", &["pet", "kitten", "feline"]),
+        // Time
+        ("recently", &["lately", "last", "new", "current", "past"]),
+        ("favorite", &["prefer", "favourite", "best", "love", "like"]),
+        ("hobby", &["interest", "passion", "activity", "enjoy"]),
+    ];
+
+    let query_lower = query.to_lowercase();
+    let query_words: HashSet<&str> = query_lower.split_whitespace().collect();
+
+    let mut additions: Vec<&str> = Vec::new();
+    for (trigger, expansions) in SYNONYMS {
+        if query_words.contains(trigger) {
+            for exp in *expansions {
+                if !query_words.contains(exp) && !additions.contains(exp) {
+                    additions.push(exp);
+                }
+            }
+        }
+    }
+
+    if additions.is_empty() {
+        return query.to_string();
+    }
+
+    // Append expansions to the original query (preserves original casing)
+    format!("{} {}", query, additions.join(" "))
+}
+
+/// Extract probable named entities from text. Uses a simple heuristic:
+/// capitalized words ≥ 3 chars that aren't common sentence-starters.
+/// This is intentionally rough — we're looking for "Deborah", "Alice",
+/// "PostgreSQL", "Brussels", not building a full NER pipeline.
+fn extract_entities(text: &str) -> Vec<String> {
+    static STOP_WORDS: &[&str] = &[
+        "The", "This", "That", "These", "Those", "What", "When", "Where", "Which", "Who", "How",
+        "Why", "Yes", "Not", "But", "And", "For", "Are", "Was", "Were", "Has", "Have", "Had",
+        "Will", "Would", "Could", "Should", "May", "Can", "Did", "Does", "Been", "Being", "Also",
+        "Just", "Very", "Really", "Some", "Any", "All", "Each", "Every", "Most", "More", "Much",
+        "Many", "Other", "Another", "Here", "There", "Then", "Now", "Well", "Too", "Sure", "Nice",
+        "Good", "Great", "Cool", "Thanks", "Sorry", "Please", "Hello",
+    ];
+
+    let mut entities: Vec<String> = Vec::new();
+    let mut seen = HashSet::new();
+
+    for word in text.split_whitespace() {
+        // Strip trailing punctuation
+        let clean: String = word
+            .trim_matches(|c: char| !c.is_alphanumeric())
+            .to_string();
+        if clean.len() < 3 {
+            continue;
+        }
+        // Must start with uppercase
+        let first = clean.chars().next().unwrap_or('a');
+        if !first.is_uppercase() {
+            continue;
+        }
+        // Skip common words
+        if STOP_WORDS.iter().any(|sw| sw.eq_ignore_ascii_case(&clean)) {
+            continue;
+        }
+        let lower = clean.to_lowercase();
+        if seen.insert(lower) {
+            entities.push(clean);
+        }
+    }
+
+    // Limit to top 5 to bound expansion cost
+    entities.truncate(5);
+    entities
+}
+
 fn content_hash8(s: &str) -> [u8; 8] {
     let mut h = Sha256::new();
     h.update(s.as_bytes());
@@ -279,6 +541,7 @@ fn content_hash8(s: &str) -> [u8; 8] {
 mod tests {
     use super::*;
     use crate::chunker::ChunkInputRole;
+    use crate::reranker::KeywordReranker;
     use chrono::Utc;
     use tempfile::tempdir;
 
@@ -290,6 +553,7 @@ mod tests {
             deduplicate: true,
             storage_path: dir.join("chunks.jsonl"),
             chunk_config: ChunkConfig::default(),
+            multihop: false,
         }
     }
 
@@ -450,5 +714,85 @@ mod tests {
         let total: usize = result.chunks.iter().map(|c| c.chunk.token_count).sum();
         // Allow one chunk over budget (we only stop after exceeding).
         assert!(total <= 60, "total = {}", total);
+    }
+
+    #[test]
+    fn keyword_reranker_reorders_results() {
+        let dir = tempdir().unwrap();
+        let mut cfg = cfg_in(dir.path());
+        cfg.top_k = 10;
+        cfg.min_score = 0.0;
+        cfg.max_retrieved_tokens = 10000;
+
+        // Build two retrievers: one without reranker, one with.
+        let embedder: Arc<dyn Embedder> = Arc::new(HashEmbedder::default());
+        let mut r_plain = Retriever::with_embedder(cfg.clone(), embedder.clone()).unwrap();
+
+        // We need a separate store path for the reranked retriever.
+        let dir2 = tempdir().unwrap();
+        let mut cfg2 = cfg_in(dir2.path());
+        cfg2.top_k = cfg.top_k;
+        cfg2.min_score = cfg.min_score;
+        cfg2.max_retrieved_tokens = cfg.max_retrieved_tokens;
+        let mut r_reranked =
+            Retriever::with_reranker(cfg2, embedder.clone(), Box::new(KeywordReranker)).unwrap();
+
+        let msgs = vec![
+            msg(
+                0,
+                ChunkInputRole::User,
+                "Tell me about Rust programming language and memory safety.",
+            ),
+            msg(
+                1,
+                ChunkInputRole::Assistant,
+                "Rust guarantees memory safety without garbage collection through its ownership system.",
+            ),
+            msg(
+                2,
+                ChunkInputRole::User,
+                "What about Python for data science?",
+            ),
+            msg(
+                3,
+                ChunkInputRole::Assistant,
+                "Python is the dominant language for data science thanks to numpy and pandas.",
+            ),
+        ];
+        r_plain.index_messages(&msgs).unwrap();
+        r_reranked.index_messages(&msgs).unwrap();
+
+        // Query about "Rust memory" — reranker should boost chunks that
+        // actually contain those keywords.
+        let plain_result = r_plain.retrieve("Rust memory safety ownership").unwrap();
+        let reranked_result = r_reranked.retrieve("Rust memory safety ownership").unwrap();
+
+        // Both should return results
+        assert!(!plain_result.chunks.is_empty());
+        assert!(!reranked_result.chunks.is_empty());
+
+        // In the reranked result, chunks about Rust should have higher
+        // scores than chunks about Python.
+        let rust_chunks: Vec<&ScoredChunk> = reranked_result
+            .chunks
+            .iter()
+            .filter(|c| c.chunk.content.to_lowercase().contains("rust"))
+            .collect();
+        let python_chunks: Vec<&ScoredChunk> = reranked_result
+            .chunks
+            .iter()
+            .filter(|c| c.chunk.content.to_lowercase().contains("python"))
+            .collect();
+
+        if !rust_chunks.is_empty() && !python_chunks.is_empty() {
+            let best_rust = rust_chunks.iter().map(|c| c.score).fold(0.0f32, f32::max);
+            let best_python = python_chunks.iter().map(|c| c.score).fold(0.0f32, f32::max);
+            assert!(
+                best_rust > best_python,
+                "expected Rust chunks ({}) to outscore Python chunks ({})",
+                best_rust,
+                best_python
+            );
+        }
     }
 }

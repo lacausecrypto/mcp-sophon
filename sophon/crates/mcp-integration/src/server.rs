@@ -72,6 +72,10 @@ impl SophonServer {
                 let dir = expand_tilde(&raw);
                 let mut rcfg = RetrieverConfig::default();
                 rcfg.storage_path = dir.join("chunks.jsonl");
+                // Multi-hop retrieval: activated via SOPHON_MULTIHOP=1
+                rcfg.multihop = std::env::var("SOPHON_MULTIHOP")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false);
 
                 let embedder_choice = std::env::var("SOPHON_EMBEDDER")
                     .unwrap_or_default()

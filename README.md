@@ -45,18 +45,16 @@ source of truth for everything Sophon claims.
   prompts: Sophon saves **77.3 % in 63 ms**, LLMLingua-2 saves 68.4 %
   in 2 176 ms — **~10 points more saved and ~35× faster**
   ([BENCHMARK.md § 7.8.d](./BENCHMARK.md#78d-head-to-head-sophon-compress_prompt-vs-llmlingua-2))
+- **LOCOMO N=80 (most reliable)** — block-based LLM summary reaches
+  **40.0 %** (FULL ceiling 71.2 %), stable across N=30/60/80. The LLM
+  summary **beats the retriever** (32.5 %) by +7.5 pts because
+  pre-digested facts outperform raw chunk retrieval. ~20 Haiku calls
+  per item (~$0.001) for +16.2 pts over the free heuristic
+  ([BENCHMARK.md § 7.12](./BENCHMARK.md#712-five-pipeline-fixes--n306080-multi-scale-validation))
 - **vs mem0-lite on LOCOMO** (N=15, same judge, same rubric):
-  Sophon **60.0 %** accuracy ≈ mem0-lite **60.0 %** — **tie on
-  accuracy, Sophon runs sub-second vs 8.7 minutes and zero LLM calls
-  vs ~330**
+  Sophon **60.0 %** ≈ mem0-lite **60.0 %** — **tie, sub-second vs
+  8.7 min, zero vs ~330 LLM calls**
   ([BENCHMARK.md § 7.8.e](./BENCHMARK.md#78e-mem0-lite-on-locomo--same-item-comparison))
-- **LOCOMO retrieval at scale** — on N=15 items: retriever reaches
-  **60.0 %** (FULL ceiling 73.3 %). On N=40 items (harder sample):
-  retriever at **42.5 %** (FULL ceiling 75.0 %). Both measured with
-  the same binary, judge, and seed — the gap reflects item difficulty,
-  not a regression
-  ([N=15 § 7.10](./BENCHMARK.md#710-v021-all-conditions-rerun-adaptive-window-overlap-fix-5-new-output-filters),
-  [N=40 § 7.11](./BENCHMARK.md#711-n40-scale-up--harder-items-more-honest-numbers))
 
 Every head-to-head above runs on the same machine, same tokenizer
 (`tiktoken cl100k_base`), same LLM judge, and same inputs. The
@@ -86,13 +84,17 @@ losses as loudly as our wins:
   integration. Sophon's `navigate_codebase` is a faithful Rust
   re-implementation, not a reinvention.
   ([BENCHMARK.md § 7.6](./BENCHMARK.md#76-tree-sitter-vs-regex-backend-on-the-same-5-repos))
+- **Multi-hop reasoning = 0 %** — all 16 multi-hop LOCOMO items fail
+  across every Sophon condition (summary, retrieval, BGE). Only FULL
+  context reaches 75 %. Cross-session reasoning needs a fact graph or
+  LLM-in-the-loop, neither of which Sophon has today
+  ([§ 7.12](./BENCHMARK.md#712-five-pipeline-fixes--n306080-multi-scale-validation))
 - **Public corrections** — we've caught and published our own
-  optimistic biases twice:
-  - N=30 → N=60 correction reduced the retrieval headline from
-    +23 pts to +13 pts ([§ 3.7](./BENCHMARK.md#37-locomo-open-ended-retrieval-n60))
-  - N=15 → N=40 scale-up reduced RETR_HASH from 60 % to 42.5 %
-    and showed BGE underperforming Hash on harder items
-    ([§ 7.11](./BENCHMARK.md#711-n40-scale-up--harder-items-more-honest-numbers))
+  optimistic biases three times:
+  - N=30 → N=60 retrieval: +23 pts → +13 pts ([§ 3.7](./BENCHMARK.md#37-locomo-open-ended-retrieval-n60))
+  - N=15 → N=40: RETR_HASH 60 % → 42.5 % ([§ 7.11](./BENCHMARK.md#711-n40-scale-up--harder-items-more-honest-numbers))
+  - N=80 final: COMP_LLM (40 %) beats retriever (32.5 %) —
+    inverts the expected finding ([§ 7.12](./BENCHMARK.md#712-five-pipeline-fixes--n306080-multi-scale-validation))
 
 If any benchmark here looks too clean, open an issue — we publish
 our corrections in the same doc as our wins.
