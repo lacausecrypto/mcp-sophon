@@ -49,7 +49,7 @@ cross-session reasoning that Sophon doesn't have yet.
 | RETR_BGE | 60.0 % | 30.0 % | 32.5 % | 31.7 % | 33.8 % | [24.3 – 44.6 %] |
 | FULL | 73.3 % | 66.7 % | 75.0 % | 75.0 % | 71.2 % | [60.5 – 80.0 %] |
 
-**Lecture**:
+**Reading**:
 - N=15 numbers were optimistic (easy items). N=40/80 reveals true performance.
 - COMP_LLM is stable at ~40 % (v0.3.0's big finding — LLM summary > retrieval).
 - Multi-hop = 0 % across all Sophon conditions (see § 7.12).

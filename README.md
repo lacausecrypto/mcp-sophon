@@ -59,11 +59,11 @@ Stability check: same `random.seed(42)`, same judge, items are nested (N=60 cont
 | RETR_BGE | 60.0 % | 30.0 % | 32.5 % | 31.7 % | 33.8 % | [24.3 – 44.6 %] |
 | FULL (ceiling) | 73.3 % | 66.7 % | 75.0 % | 75.0 % | 71.2 % | [60.5 – 80.0 %] |
 
-**Lecture honnête** :
-- Les chiffres N=15 étaient optimistes (échantillon trop petit, items faciles). Le passage à N=40 puis N=80 révèle la vraie performance.
-- **COMP_LLM à 40 % est stable** sur les 3 échelles où il a été mesuré (N=30/60/80). C'est le chiffre fiable.
-- Le retriever stagne autour de **32-34 %** quel que soit l'embedder (Hash ou BGE).
-- Tous les conditions sont à **0 % sur multi-hop** — seul FULL (75 %) y arrive. Gap structurel documenté.
+**Honest reading**:
+- N=15 numbers were optimistic (too small a sample, easy items). Scaling to N=40 then N=80 reveals the true performance.
+- **COMP_LLM is stable at 40 %** across the three scales where it was measured (N=30/60/80). This is the reliable number.
+- The retriever plateaus around **32–34 %** regardless of the embedder (Hash or BGE).
+- All Sophon conditions score **0 % on multi-hop** — only FULL (75 %) gets there. Structural gap, documented.
 
 ---
 
