@@ -88,8 +88,8 @@ pub fn compress_history(messages: &[Message], config: &MemoryConfig) -> Compress
     let opt_out = std::env::var("SOPHON_NO_LLM_SUMMARY")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
-    let use_llm = !opt_out
-        && (config.use_llm_summarization || std::env::var("SOPHON_LLM_CMD").is_ok());
+    let use_llm =
+        !opt_out && (config.use_llm_summarization || std::env::var("SOPHON_LLM_CMD").is_ok());
     let summary = if use_llm {
         let target = if messages.len() < config.compression_threshold {
             messages
@@ -260,8 +260,7 @@ fn llm_summarize(messages: &[Message]) -> Option<String> {
         .enumerate()
         .map(|(i, block)| {
             let transcript = format_transcript(block);
-            let body = llm_call(&transcript, false)
-                .unwrap_or_else(|| heuristic_summarize(block));
+            let body = llm_call(&transcript, false).unwrap_or_else(|| heuristic_summarize(block));
             format!("[Block {}/{}] {}", i + 1, total, body)
         })
         .collect();

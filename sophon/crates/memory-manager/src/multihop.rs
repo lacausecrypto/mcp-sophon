@@ -87,17 +87,15 @@ pub fn is_likely_multihop(query: &str) -> bool {
 fn count_entities(tokens: &[&str]) -> usize {
     static STOP_CAPS: &[&str] = &[
         "What", "When", "Where", "Which", "Who", "Whom", "Whose", "How", "Why", "Did", "Do",
-        "Does", "Is", "Are", "Was", "Were", "Has", "Have", "Had", "Can", "Could", "Will",
-        "Would", "Should", "May", "Might", "Shall", "The", "This", "That", "These", "Those",
-        "A", "An", "And", "Or", "But", "If", "Then", "So", "On", "In", "At", "For", "With",
-        "To", "From", "By", "Of",
+        "Does", "Is", "Are", "Was", "Were", "Has", "Have", "Had", "Can", "Could", "Will", "Would",
+        "Should", "May", "Might", "Shall", "The", "This", "That", "These", "Those", "A", "An",
+        "And", "Or", "But", "If", "Then", "So", "On", "In", "At", "For", "With", "To", "From",
+        "By", "Of",
     ];
 
     let mut seen: HashSet<String> = HashSet::new();
     for (i, raw) in tokens.iter().enumerate() {
-        let clean: String = raw
-            .trim_matches(|c: char| !c.is_alphanumeric())
-            .to_string();
+        let clean: String = raw.trim_matches(|c: char| !c.is_alphanumeric()).to_string();
         if clean.len() < 3 {
             continue;
         }

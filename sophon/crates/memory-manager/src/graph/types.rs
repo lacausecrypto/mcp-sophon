@@ -297,20 +297,14 @@ mod tests {
         assert_eq!(EntityId::from_name("Alice").as_str(), "alice");
         assert_eq!(EntityId::from_name("  ALICE  ").as_str(), "alice");
         assert_eq!(EntityId::from_name("Alice Smith").as_str(), "alice smith");
-        assert_eq!(
-            EntityId::from_name("Alice   Smith").as_str(),
-            "alice smith"
-        );
+        assert_eq!(EntityId::from_name("Alice   Smith").as_str(), "alice smith");
     }
 
     #[test]
     fn entity_id_strips_punctuation() {
         assert_eq!(EntityId::from_name("Alice!").as_str(), "alice");
         assert_eq!(EntityId::from_name("Alice's dog").as_str(), "alices dog");
-        assert_eq!(
-            EntityId::from_name("New York, NY.").as_str(),
-            "new york ny"
-        );
+        assert_eq!(EntityId::from_name("New York, NY.").as_str(), "new york ny");
     }
 
     #[test]
@@ -437,8 +431,14 @@ mod tests {
             FactObject::Entity(EntityId::from_name("Alice")).as_display(),
             "alice"
         );
-        assert_eq!(FactObject::Literal("hello".to_string()).as_display(), "hello");
-        assert_eq!(FactObject::Date("2024-01-01".to_string()).as_display(), "2024-01-01");
+        assert_eq!(
+            FactObject::Literal("hello".to_string()).as_display(),
+            "hello"
+        );
+        assert_eq!(
+            FactObject::Date("2024-01-01".to_string()).as_display(),
+            "2024-01-01"
+        );
         assert_eq!(FactObject::Number("42".to_string()).as_display(), "42");
     }
 

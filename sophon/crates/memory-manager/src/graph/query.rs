@@ -56,10 +56,7 @@ pub fn resolve_query_entities(store: &GraphStore, raw_entities: &[String]) -> Ve
         let needle = target.as_str();
         for e in store.iter_entities() {
             let canonical_match = e.id.as_str().contains(needle) || needle.contains(e.id.as_str());
-            let alias_match = e
-                .aliases
-                .iter()
-                .any(|a| EntityId::from_name(a) == target);
+            let alias_match = e.aliases.iter().any(|a| EntityId::from_name(a) == target);
             if canonical_match || alias_match {
                 if seen.insert(e.id.clone()) {
                     out.push(e.id.clone());
@@ -75,11 +72,58 @@ pub fn resolve_query_entities(store: &GraphStore, raw_entities: &[String]) -> Ve
 /// so query-side and ingest-side agree on what counts as an entity.
 pub fn extract_query_entities(query: &str) -> Vec<String> {
     const STOP: &[&str] = &[
-        "The", "This", "That", "These", "Those", "What", "When", "Where", "Which", "Who",
-        "Whom", "Whose", "How", "Why", "Did", "Do", "Does", "Is", "Are", "Was", "Were",
-        "Has", "Have", "Had", "Can", "Could", "Will", "Would", "Should", "May", "Might",
-        "Shall", "A", "An", "And", "Or", "But", "If", "Then", "So", "On", "In", "At",
-        "For", "With", "To", "From", "By", "Of", "Session", "User", "Assistant",
+        "The",
+        "This",
+        "That",
+        "These",
+        "Those",
+        "What",
+        "When",
+        "Where",
+        "Which",
+        "Who",
+        "Whom",
+        "Whose",
+        "How",
+        "Why",
+        "Did",
+        "Do",
+        "Does",
+        "Is",
+        "Are",
+        "Was",
+        "Were",
+        "Has",
+        "Have",
+        "Had",
+        "Can",
+        "Could",
+        "Will",
+        "Would",
+        "Should",
+        "May",
+        "Might",
+        "Shall",
+        "A",
+        "An",
+        "And",
+        "Or",
+        "But",
+        "If",
+        "Then",
+        "So",
+        "On",
+        "In",
+        "At",
+        "For",
+        "With",
+        "To",
+        "From",
+        "By",
+        "Of",
+        "Session",
+        "User",
+        "Assistant",
     ];
     let mut seen: HashSet<String> = HashSet::new();
     let mut out: Vec<String> = Vec::new();
@@ -140,10 +184,7 @@ pub fn query(store: &GraphStore, query_text: &str, top_k: usize) -> Vec<ScoredFa
     }
 
     // Recency range for normalisation.
-    let extracted_ats: Vec<&String> = harvest
-        .values()
-        .map(|(f, _)| &f.extracted_at)
-        .collect();
+    let extracted_ats: Vec<&String> = harvest.values().map(|(f, _)| &f.extracted_at).collect();
     let max_ts = extracted_ats.iter().max().cloned();
     let min_ts = extracted_ats.iter().min().cloned();
 
@@ -292,7 +333,14 @@ mod tests {
         let mut store = GraphStore::new();
         apply_triples(
             &mut store,
-            vec![mk_fact("Alice", "visited", "Paris", true, 0.9, "2024-01-01")],
+            vec![mk_fact(
+                "Alice",
+                "visited",
+                "Paris",
+                true,
+                0.9,
+                "2024-01-01",
+            )],
             "2024-01-01",
         );
         let ids = resolve_query_entities(&store, &["Alice".to_string()]);
@@ -369,7 +417,14 @@ mod tests {
         let mut store = GraphStore::new();
         apply_triples(
             &mut store,
-            vec![mk_fact("Alice", "visited", "Paris", true, 0.9, "2024-01-01")],
+            vec![mk_fact(
+                "Alice",
+                "visited",
+                "Paris",
+                true,
+                0.9,
+                "2024-01-01",
+            )],
             "2024-01-01",
         );
         // All-lowercase query → no entities extracted.

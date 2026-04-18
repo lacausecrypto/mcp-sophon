@@ -114,7 +114,10 @@ mod tests {
         let fused = rrf_fuse(&[r1, r2], RRF_K);
         let a_pos = fused.iter().position(|c| c.chunk.id == "a").unwrap();
         let b_pos = fused.iter().position(|c| c.chunk.id == "b").unwrap();
-        assert!(a_pos < b_pos, "a (in both lists) should outrank b (one list)");
+        assert!(
+            a_pos < b_pos,
+            "a (in both lists) should outrank b (one list)"
+        );
     }
 
     #[test]

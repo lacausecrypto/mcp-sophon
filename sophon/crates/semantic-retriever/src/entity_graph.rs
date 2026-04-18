@@ -49,14 +49,97 @@ const DEFAULT_SEARCH_CAP: usize = 30;
 /// sentence but almost never are. Extends the list already used in
 /// `retriever::extract_entities`.
 static STOP_CAPS: &[&str] = &[
-    "The", "This", "That", "These", "Those", "What", "When", "Where", "Which", "Who", "Whom",
-    "Whose", "How", "Why", "Yes", "No", "Not", "But", "And", "Or", "For", "Are", "Was", "Were",
-    "Has", "Have", "Had", "Will", "Would", "Could", "Should", "May", "Can", "Did", "Does",
-    "Been", "Being", "Also", "Just", "Very", "Really", "Some", "Any", "All", "Each", "Every",
-    "Most", "More", "Much", "Many", "Other", "Another", "Here", "There", "Then", "Now", "Well",
-    "Too", "Sure", "Nice", "Good", "Great", "Cool", "Thanks", "Sorry", "Please", "Hello",
-    "Hi", "Okay", "OK", "Mr", "Mrs", "Ms", "Dr", "If", "It", "Is", "As", "At", "In", "On",
-    "To", "By", "Of", "Be", "Do", "So", "Session", "User", "Assistant", "System",
+    "The",
+    "This",
+    "That",
+    "These",
+    "Those",
+    "What",
+    "When",
+    "Where",
+    "Which",
+    "Who",
+    "Whom",
+    "Whose",
+    "How",
+    "Why",
+    "Yes",
+    "No",
+    "Not",
+    "But",
+    "And",
+    "Or",
+    "For",
+    "Are",
+    "Was",
+    "Were",
+    "Has",
+    "Have",
+    "Had",
+    "Will",
+    "Would",
+    "Could",
+    "Should",
+    "May",
+    "Can",
+    "Did",
+    "Does",
+    "Been",
+    "Being",
+    "Also",
+    "Just",
+    "Very",
+    "Really",
+    "Some",
+    "Any",
+    "All",
+    "Each",
+    "Every",
+    "Most",
+    "More",
+    "Much",
+    "Many",
+    "Other",
+    "Another",
+    "Here",
+    "There",
+    "Then",
+    "Now",
+    "Well",
+    "Too",
+    "Sure",
+    "Nice",
+    "Good",
+    "Great",
+    "Cool",
+    "Thanks",
+    "Sorry",
+    "Please",
+    "Hello",
+    "Hi",
+    "Okay",
+    "OK",
+    "Mr",
+    "Mrs",
+    "Ms",
+    "Dr",
+    "If",
+    "It",
+    "Is",
+    "As",
+    "At",
+    "In",
+    "On",
+    "To",
+    "By",
+    "Of",
+    "Be",
+    "Do",
+    "So",
+    "Session",
+    "User",
+    "Assistant",
+    "System",
 ];
 
 /// Lightweight NER: proper-noun-looking tokens (capitalised, length ≥ 3,
@@ -205,10 +288,8 @@ impl EntityGraph {
         let query_set: HashSet<String> = query_entities.iter().map(|e| norm(e)).collect();
 
         // Pre-compute IDF per query entity.
-        let idfs: HashMap<String, f32> = query_set
-            .iter()
-            .map(|e| (e.clone(), self.idf(e)))
-            .collect();
+        let idfs: HashMap<String, f32> =
+            query_set.iter().map(|e| (e.clone(), self.idf(e))).collect();
 
         // Stage 1: direct match.
         let mut scores: HashMap<String, f32> = HashMap::new();
@@ -248,13 +329,10 @@ impl EntityGraph {
 
         if top_hit_coverage < target_coverage && !query_set.is_empty() {
             // Pick up to 5 best direct chunks as bridges.
-            let mut bridge_candidates: Vec<(String, f32)> = scores
-                .iter()
-                .map(|(k, v)| (k.clone(), *v))
-                .collect();
-            bridge_candidates.sort_by(|a, b| {
-                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-            });
+            let mut bridge_candidates: Vec<(String, f32)> =
+                scores.iter().map(|(k, v)| (k.clone(), *v)).collect();
+            bridge_candidates
+                .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             bridge_candidates.truncate(5);
 
             for (bridge_id, _bridge_score) in &bridge_candidates {
@@ -268,10 +346,8 @@ impl EntityGraph {
                     // For each non-query entity on the bridge, find other
                     // chunks that share it AND contain a query entity
                     // that the bridge lacks.
-                    let missing: HashSet<String> = query_set
-                        .difference(bridge_entities)
-                        .cloned()
-                        .collect();
+                    let missing: HashSet<String> =
+                        query_set.difference(bridge_entities).cloned().collect();
                     if missing.is_empty() {
                         continue;
                     }
@@ -282,12 +358,10 @@ impl EntityGraph {
                         if neighbour_id == bridge_id {
                             continue;
                         }
-                        let Some(neigh_entities) = self.chunk_to_entities.get(neighbour_id)
-                        else {
+                        let Some(neigh_entities) = self.chunk_to_entities.get(neighbour_id) else {
                             continue;
                         };
-                        let overlap: Vec<&String> =
-                            neigh_entities.intersection(&missing).collect();
+                        let overlap: Vec<&String> = neigh_entities.intersection(&missing).collect();
                         if overlap.is_empty() {
                             continue;
                         }
@@ -305,9 +379,7 @@ impl EntityGraph {
         }
 
         let mut sorted: Vec<(String, f32)> = scores.into_iter().collect();
-        sorted.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         sorted.truncate(k.min(DEFAULT_SEARCH_CAP));
         sorted
     }
@@ -414,16 +486,16 @@ mod tests {
             "A",
             "Maria talked about getting a new Puppy from the adoption centre",
         );
-        g.insert_chunk(
-            "B",
-            "Shadow arrived on May 5 the Puppy settled in quickly",
-        );
+        g.insert_chunk("B", "Shadow arrived on May 5 the Puppy settled in quickly");
         g.insert_chunk("C", "Bob went to Rome for a conference unrelated to pets");
 
         let hits = g.search("Maria Shadow", 5);
         let ids: Vec<&str> = hits.iter().map(|(id, _)| id.as_str()).collect();
-        assert!(ids.contains(&"A") && ids.contains(&"B"),
-                "both direct hits should surface; got {:?}", ids);
+        assert!(
+            ids.contains(&"A") && ids.contains(&"B"),
+            "both direct hits should surface; got {:?}",
+            ids
+        );
         assert!(!ids.contains(&"C"), "unrelated chunk C must not appear");
     }
 

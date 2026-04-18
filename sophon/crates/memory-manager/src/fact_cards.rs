@@ -148,7 +148,10 @@ fn format_transcript_bounded(messages: &[Message], max_chars: usize) -> String {
         .find(|i| transcript.is_char_boundary(*i))
         .unwrap_or(transcript.len());
     let tail = &transcript[tail_start..];
-    format!("{head}\n[...{} chars omitted...]\n{tail}", transcript.len() - head.len() - tail.len())
+    format!(
+        "{head}\n[...{} chars omitted...]\n{tail}",
+        transcript.len() - head.len() - tail.len()
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -263,7 +266,7 @@ mod tests {
         assert!(rendered.contains("## Alice"));
         assert!(rendered.contains("- [2024-01] did X"));
         assert!(rendered.contains("- said Y")); // empty date drops the [] prefix
-        // Alice before Bob — BTreeMap lexicographic order.
+                                                // Alice before Bob — BTreeMap lexicographic order.
         assert!(rendered.find("Alice").unwrap() < rendered.find("Bob").unwrap());
     }
 
@@ -280,10 +283,7 @@ mod tests {
         let events: Vec<String> = (0..10)
             .map(|i| format!("{{\"date\": \"d{i}\", \"event\": \"e{i}\"}}"))
             .collect();
-        let json = format!(
-            r#"{{"entities": {{"X": [{}]}}}}"#,
-            events.join(",")
-        );
+        let json = format!(r#"{{"entities": {{"X": [{}]}}}}"#, events.join(","));
         let fc = parse_fact_cards(&json).unwrap();
         assert_eq!(fc.entities.get("X").unwrap().len(), MAX_EVENTS_PER_ENTITY);
     }
@@ -313,12 +313,17 @@ mod tests {
             .map(|i| {
                 Message::new(
                     Role::User,
-                    format!("This is a reasonably long message number {i} with some filler content."),
+                    format!(
+                        "This is a reasonably long message number {i} with some filler content."
+                    ),
                 )
             })
             .collect();
         let t = format_transcript_bounded(&msgs, 2000);
-        assert!(t.contains("chars omitted"), "should include omission marker");
+        assert!(
+            t.contains("chars omitted"),
+            "should include omission marker"
+        );
         assert!(t.len() <= 2200, "length should be bounded, got {}", t.len());
         assert!(t.contains("message number 0"), "should keep head");
         assert!(t.contains("message number 499"), "should keep tail");

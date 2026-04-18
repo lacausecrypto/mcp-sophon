@@ -5,9 +5,8 @@ use chrono::Utc;
 use delta_streamer::protocol::{FileChanges, FileWriteRequest};
 use memory_manager::graph::{ingest_messages_batched, query_graph, render_facts};
 use memory_manager::{
-    classify_question, decompose_query, extract_fact_cards, hyde_rewrite_query,
-    is_likely_multihop, react_decide, rerank_chunks, summarise_tail, Message, QuestionMode,
-    ReactDecision, Role,
+    classify_question, decompose_query, extract_fact_cards, hyde_rewrite_query, is_likely_multihop,
+    react_decide, rerank_chunks, summarise_tail, Message, QuestionMode, ReactDecision, Role,
 };
 use semantic_retriever::chunker::{ChunkInputMessage, ChunkInputRole};
 use semantic_retriever::{rrf_fuse, ScoredChunk, RRF_K};
@@ -190,24 +189,23 @@ pub fn handle_tool_call(
             // Path A: pure-Rust graph query. Runs when graph memory is
             // active AND a query is provided. Zero LLM calls at this
             // step — all the extraction work was done at update_memory.
-            let graph_facts_value = if let (Some(graph), Some(q)) =
-                (server.graph_memory.as_ref(), query.as_deref())
-            {
-                let top_k = retrieval_top_k.unwrap_or(8);
-                let hits = query_graph(graph, q, top_k);
-                if hits.is_empty() {
-                    None
+            let graph_facts_value =
+                if let (Some(graph), Some(q)) = (server.graph_memory.as_ref(), query.as_deref()) {
+                    let top_k = retrieval_top_k.unwrap_or(8);
+                    let hits = query_graph(graph, q, top_k);
+                    if hits.is_empty() {
+                        None
+                    } else {
+                        let rendered = render_facts(&hits);
+                        Some(json!({
+                            "rendered": rendered,
+                            "fact_count": hits.len(),
+                            "top_score": hits.first().map(|s| s.score).unwrap_or(0.0),
+                        }))
+                    }
                 } else {
-                    let rendered = render_facts(&hits);
-                    Some(json!({
-                        "rendered": rendered,
-                        "fact_count": hits.len(),
-                        "top_score": hits.first().map(|s| s.score).unwrap_or(0.0),
-                    }))
-                }
-            } else {
-                None
-            };
+                    None
+                };
 
             // Optional fact-card extraction (SOPHON_FACT_CARDS=1). Entity-
             // indexed timeline produced via one extra Haiku call. Rendered
@@ -301,17 +299,12 @@ pub fn handle_tool_call(
                 // per update_memory — the only LLM cost of the graph
                 // path; query time stays pure Rust.
                 if let Some(graph) = server.graph_memory.as_mut() {
-                    let chunk_id = format!(
-                        "update-{}",
-                        Utc::now().timestamp_millis()
-                    );
+                    let chunk_id = format!("update-{}", Utc::now().timestamp_millis());
                     let now = Utc::now().to_rfc3339();
                     // Parallelised extraction via rayon — up to N×
                     // speed-up on long batches (one Haiku call per
                     // ~30-message slice, run concurrently).
-                    let report = ingest_messages_batched(
-                        graph, &new_msgs, &chunk_id, &now, None,
-                    );
+                    let report = ingest_messages_batched(graph, &new_msgs, &chunk_id, &now, None);
                     let _ = graph.save(); // best-effort persistence
                     graph_ingest_summary = Some(json!({
                         "triples_seen": report.triples_seen,
@@ -650,9 +643,11 @@ fn run_retrieval(
     let (effective_top_k, effective_budget, question_mode): (usize, usize, Option<&'static str>) =
         if adaptive_on {
             match classify_question(query) {
-                Some(QuestionMode::FactualRecall) => {
-                    (base_top_k.saturating_mul(2), base_budget.saturating_mul(2), Some("factual_recall"))
-                }
+                Some(QuestionMode::FactualRecall) => (
+                    base_top_k.saturating_mul(2),
+                    base_budget.saturating_mul(2),
+                    Some("factual_recall"),
+                ),
                 Some(QuestionMode::General) => (base_top_k, base_budget, Some("general")),
                 None => (base_top_k, base_budget, Some("unknown")),
             }
@@ -816,9 +811,7 @@ fn run_retrieval(
                     .take(n)
                     .map(|(i, &s)| (i, s))
                     .collect();
-                indexed.sort_by(|a, b| {
-                    b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-                });
+                indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
                 let mut reranked: Vec<ScoredChunk> = Vec::with_capacity(fused.len());
                 for (idx, _) in &indexed {
                     reranked.push(fused[*idx].clone());

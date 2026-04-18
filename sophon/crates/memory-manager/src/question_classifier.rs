@@ -90,7 +90,10 @@ mod tests {
 
     #[test]
     fn parses_factual_recall_bare() {
-        assert_eq!(parse_mode("FACTUAL_RECALL"), Some(QuestionMode::FactualRecall));
+        assert_eq!(
+            parse_mode("FACTUAL_RECALL"),
+            Some(QuestionMode::FactualRecall)
+        );
     }
 
     #[test]
@@ -122,10 +125,7 @@ mod tests {
     #[test]
     fn ambiguous_returns_none() {
         // Both tokens present
-        assert_eq!(
-            parse_mode("could be FACTUAL_RECALL or GENERAL"),
-            None
-        );
+        assert_eq!(parse_mode("could be FACTUAL_RECALL or GENERAL"), None);
     }
 
     #[test]

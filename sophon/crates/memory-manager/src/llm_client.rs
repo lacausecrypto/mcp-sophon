@@ -25,8 +25,7 @@ pub fn call_llm(prompt: &str) -> Option<String> {
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
 
-    let cmd_str =
-        std::env::var("SOPHON_LLM_CMD").unwrap_or_else(|_| DEFAULT_LLM_CMD.to_string());
+    let cmd_str = std::env::var("SOPHON_LLM_CMD").unwrap_or_else(|_| DEFAULT_LLM_CMD.to_string());
     let parts: Vec<&str> = cmd_str.split_whitespace().collect();
     if parts.is_empty() {
         if debug {

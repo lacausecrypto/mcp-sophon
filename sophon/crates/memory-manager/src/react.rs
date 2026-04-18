@@ -157,7 +157,9 @@ mod tests {
     fn parse(json: &str) -> ReactDecision {
         let body = extract_json_object(json).unwrap_or_default();
         let parsed: Result<DecisionOutput, _> = serde_json::from_str(&body);
-        parsed.map(|d| d.to_decision()).unwrap_or(ReactDecision::Unknown)
+        parsed
+            .map(|d| d.to_decision())
+            .unwrap_or(ReactDecision::Unknown)
     }
 
     #[test]
@@ -184,10 +186,7 @@ mod tests {
     #[test]
     fn parses_with_leading_prose() {
         let raw = "Based on my analysis,\n{\"has_answer\": false, \"follow_up\": \"search X\"}";
-        assert_eq!(
-            parse(raw),
-            ReactDecision::FollowUp("search X".to_string())
-        );
+        assert_eq!(parse(raw), ReactDecision::FollowUp("search X".to_string()));
     }
 
     #[test]

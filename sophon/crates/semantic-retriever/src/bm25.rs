@@ -237,7 +237,10 @@ mod tests {
              really cares about but the tokenizer still sees it",
         );
         let hits = idx.search("Jolene", 2);
-        assert_eq!(hits[0].0, "short", "short exact-match should beat long diluted");
+        assert_eq!(
+            hits[0].0, "short",
+            "short exact-match should beat long diluted"
+        );
     }
 
     #[test]

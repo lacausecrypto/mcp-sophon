@@ -20,10 +20,7 @@ pub use ingest::{
     apply_triples, ingest_messages, ingest_messages_batched, IngestReport, DEFAULT_BATCH_SIZE,
 };
 pub use query::{
-    extract_query_entities, query as query_graph, render_facts, resolve_query_entities,
-    ScoredFact,
+    extract_query_entities, query as query_graph, render_facts, resolve_query_entities, ScoredFact,
 };
 pub use store::{GraphStore, GraphStoreError};
-pub use types::{
-    Entity, EntityId, EntityType, Fact, FactId, FactObject, Predicate,
-};
+pub use types::{Entity, EntityId, EntityType, Fact, FactId, FactObject, Predicate};

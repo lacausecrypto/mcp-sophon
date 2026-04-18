@@ -404,7 +404,9 @@ mod tests {
         assert_eq!(s.fact_count(), 0);
         let alice = EntityId::from_name("Alice");
         assert!(s.facts_with_subject(&alice).is_empty());
-        assert!(s.facts_with_object_entity(&EntityId::from_name("Paris")).is_empty());
+        assert!(s
+            .facts_with_object_entity(&EntityId::from_name("Paris"))
+            .is_empty());
     }
 
     #[test]
@@ -421,6 +423,13 @@ mod tests {
         let mut s2 = GraphStore::new();
         s2.upsert_fact(f2);
         s2.upsert_fact(f);
-        assert!((s2.get_fact(&mk_fact("Alice", "visited", "Paris").id).unwrap().confidence - 0.9).abs() < 1e-6);
+        assert!(
+            (s2.get_fact(&mk_fact("Alice", "visited", "Paris").id)
+                .unwrap()
+                .confidence
+                - 0.9)
+                .abs()
+                < 1e-6
+        );
     }
 }
