@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.lacausecrypto/sophon",
   "title": "Sophon",
-  "description": "Honest token economics for MCP agents. Rust binary, zero ML, reproducible benchmarks.",
-  "version": "0.3.0",
+  "description": "Honest token economics for MCP agents. Rust binary, zero ML at query time, reproducible benchmarks. 68% session tokens saved, 70% prompt compression at 36 ms, code retrieval recall@3 70%, p99 < 87 ms on 5/7 ops.",
+  "version": "0.4.0",
   "repository": {
     "url": "https://github.com/lacausecrypto/mcp-sophon",
     "source": "github"
@@ -14,7 +14,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "mcp-sophon",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "transport": {
         "type": "stdio"
       },
@@ -45,26 +45,41 @@
         "get_token_stats"
       ],
       "optionalFeatures": {
-        "semanticRetriever": "Activated via SOPHON_RETRIEVER_PATH env var. Adds query-time retrieval to compress_history and drives the +13-point LOCOMO open-ended gain measured at N=60. Deterministic HashEmbedder (no ML at runtime). See BENCHMARK.md § 3.7.",
-        "treeSitter": "Activated via cargo feature codebase-navigator/tree-sitter. Swaps the regex extractors for AST-accurate parsing across 11 languages (Rust, Python, JS, TS, TSX, Go, Ruby, Java, C/C++, PHP, Kotlin, Swift). +8 MB in the binary, parallelised via rayon. See BENCHMARK.md § 7.8.a."
+        "semanticRetriever": "Activated via SOPHON_RETRIEVER_PATH env var. Adds query-time retrieval to compress_history. Deterministic HashEmbedder (no ML at runtime). See BENCHMARK.md § 5.",
+        "treeSitter": "Activated via cargo feature codebase-navigator/tree-sitter. Swaps the regex extractors for AST-accurate parsing across 11 languages (Rust, Python, JS, TS, TSX, Go, Ruby, Java, C/C++, PHP, Kotlin, Swift). +8 MB in the binary, parallelised via rayon.",
+        "hyde": "Activated via SOPHON_HYDE=1. Haiku writes hypothetical answers used as retrieval queries, results fused via RRF. +17 pt open-domain and single-hop on LOCOMO N=30. See BENCHMARK.md § 5.1.",
+        "factCards": "Activated via SOPHON_FACT_CARDS=1. Haiku extracts entity-indexed timeline JSON. +17 pt temporal on LOCOMO N=30.",
+        "entityGraph": "Activated via SOPHON_ENTITY_GRAPH=1. Heuristic NER + bipartite entity-chunk graph + 1-hop bridge. +17 pt multi-hop on LOCOMO N=30. Pure Rust, deterministic, ~10 ms overhead.",
+        "adaptive": "Activated via SOPHON_ADAPTIVE=1. Haiku classifies query as factual_recall vs general and bumps top_k + budget accordingly.",
+        "llmRerank": "Activated via SOPHON_LLM_RERANK=1. One Haiku call rescores top-(3×k) candidates before token budget trim.",
+        "tailSummary": "Activated via SOPHON_TAIL_SUMMARY=1. Haiku compresses chunks K+1..K+10 into a single paragraph appended to context.",
+        "graphMemory": "Activated via SOPHON_GRAPH_MEMORY=1 (experimental). Ingest-time LLM triple extraction; query time is pure Rust graph traversal. SOPHON_GRAPH_MEMORY_PATH enables JSON persistence."
       },
       "tokenizer": "cl100k_base",
       "benchmarks": {
-        "session_total_token_savings_pct": 67,
-        "cross_model_total_token_savings_pct": 64.5,
-        "locomo_comp_llm_accuracy_pct_n80": 40,
-        "locomo_retrieval_accuracy_pct_n80": 32.5,
-        "locomo_full_ceiling_pct_n80": 71.2,
-        "locomo_comp_llm_beats_retriever_by_pts": 7.5,
-        "locomo_multihop_accuracy_all_conditions": 0,
-        "bge_matches_mem0lite_at_zero_llm_calls": true,
+        "session_total_token_savings_pct": 68.1,
+        "prompt_compression_mean_saved_pct": 70.2,
+        "prompt_compression_mean_latency_ms": 36,
+        "repo_qa_recall_at_3_pct": 70,
+        "repo_qa_mean_tokens": 9563,
+        "repo_qa_mean_latency_ms": 47,
+        "latency_p99_ms_light_ops_max": 87,
+        "latency_ok_rate_pct": 100,
+        "latency_canary_preserved_pct": 87.4,
+        "locomo_v032_full_accuracy_pct_n30": 40,
+        "locomo_v030_baseline_accuracy_pct_n30": 33.3,
+        "locomo_full_ceiling_pct_n30": 73.3,
+        "locomo_multihop_v032_gain_pts": 17,
+        "locomo_open_domain_v032_gain_pts": 33,
+        "locomo_adversarial_v032_change_pts": 0,
         "vs_llmlingua2_pts_better_on_structured_prompts": 8.9,
         "vs_llmlingua2_latency_speedup_x": 35,
-        "vs_mem0_lite_locomo_accuracy_tie_pct": 60,
+        "vs_mem0_lite_locomo_accuracy_tie_pct_n15": 60,
         "vs_mem0_lite_latency_ratio_sophon_over_mem0": "sub-second vs 8.7 min",
-        "compression_overhead_ms_per_call": 6
+        "block_summary_rayon_speedup_x": 5
       },
-      "benchmarksUrl": "https://github.com/lacausecrypto/mcp-sophon/blob/main/BENCHMARK.md"
+      "benchmarksUrl": "https://github.com/lacausecrypto/mcp-sophon/blob/main/BENCHMARK.md",
+      "changelogUrl": "https://github.com/lacausecrypto/mcp-sophon/blob/main/CHANGELOG.md"
     }
   }
 }

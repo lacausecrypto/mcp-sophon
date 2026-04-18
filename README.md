@@ -1,6 +1,6 @@
 # Sophon
 
-> **Honest token economics for MCP agents.** One Rust binary. Zero ML. Reproducible benchmarks.
+> **Honest token economics for MCP agents.** One Rust binary. Zero ML at query time. Reproducible benchmarks.
 
 [![npm version](https://img.shields.io/npm/v/mcp-sophon.svg?color=blue)](https://www.npmjs.com/package/mcp-sophon)
 [![npm downloads](https://img.shields.io/npm/dm/mcp-sophon.svg)](https://www.npmjs.com/package/mcp-sophon)
@@ -9,61 +9,47 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Rust 1.75+](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
 [![MCP](https://img.shields.io/badge/MCP-2024--11--05-purple.svg)](https://modelcontextprotocol.io)
-[![Tests](https://img.shields.io/badge/tests-194%20Rust%20%2B%204%20Python-brightgreen.svg)](./BENCHMARK.md)
+[![Tests](https://img.shields.io/badge/tests-303%20Rust%20%2B%204%20Python-brightgreen.svg)](./BENCHMARK.md)
 
 Sophon is a deterministic context layer for agents speaking the Model
 Context Protocol. It compresses prompts, conversation memory, code
-digests, file deltas, and shell output — without an embedding model,
-without an LLM in the compression path, without a GPU, and without
-API keys. **7.2 MB** default Rust binary (**25 MB** with the optional
-11-language tree-sitter AST backend), MCP-native, `cl100k_base`-accurate.
+digests, file deltas, and shell output — without an embedding model at
+query time, without a GPU, and without API keys. **7.2 MB** default
+Rust binary (**25 MB** with the optional 11-language tree-sitter AST
+backend, **34 MB** with BGE embedder), MCP-native, `cl100k_base`-accurate.
 
 Every number below links to the reproducible benchmark script that
-produced it. Every caveat is in [BENCHMARK.md](./BENCHMARK.md) — the
-source of truth for everything Sophon claims.
+produced it. Every caveat is in [BENCHMARK.md](./BENCHMARK.md). Version
+history + deprecated numbers live in [CHANGELOG.md](./CHANGELOG.md).
 
 ---
 
-## TL;DR
+## TL;DR — v0.4.0
 
-Sophon v0.3.0 — stable across N=30/60/80 LOCOMO items, zero ML at runtime.
+Sophon is shaped around four use cases. Here's what we measured.
 
-### vs competitors (same inputs, same judge, same machine)
+| Use case | Metric | Compared to |
+|---|---|---|
+| **Agent session token economics** | **68.1 % tokens saved** across 25-turn coding session ([§ 1](./BENCHMARK.md#-1--session-token-economics)) | Baseline: raw tokens |
+| **Prompt compression** | **70.2 % mean saved**, **36 ms mean latency**, 22 prompt shapes ([§ 2](./BENCHMARK.md#-2--prompt-compression-extended)) | LLMLingua-2: +8.9 pt at 35× lower latency ([§ 6.1](./BENCHMARK.md#-61-vs-llmlingua-2)) |
+| **Code retrieval (repo QA)** | **recall@3 = 70 %** on "where is X?" questions ([§ 4](./BENCHMARK.md#-4--repo-qa)) | grep: 10 % ; FULL context: 20 % |
+| **Latency + reliability** | **p99 < 87 ms** on 5/7 ops, **100 % ok_rate** on 190 runs ([§ 3](./BENCHMARK.md#-3--latency--reliability)) | Sub-second guaranteed |
 
-| System | LOCOMO accuracy | LLM calls | Latency | Binary | Notes |
-|---|---:|---:|---:|---:|---|
-| **Sophon COMP_LLM** | **40.0 %** (N=80) | ~20 / item | ~30 s | 34 MB | Block-based Haiku summary |
-| **Sophon RETR_HASH** | 32.5 % (N=80) | 0 | sub-second | 34 MB | Deterministic, $0 |
-| **Sophon RETR_BGE** | 33.8 % (N=80) | 0 | sub-second | 34 MB | BGE-small ONNX |
-| **Sophon COMP_HEUR** | 23.8 % (N=80) | 0 | sub-second | 7.2 MB | Minimum baseline |
-| [mem0-lite](https://github.com/mem0ai/mem0) | 60.0 % (N=15) | ~330 / item | 8.7 min | Python stack | LLM fact extraction |
-| [LLMLingua-2](https://github.com/microsoft/LLMLingua) | n/a (compression metric) | 0 | 2 176 ms | 280 MB model | Learned compression |
-| FULL (ceiling) | 71.2 % (N=80) | 0 | — | — | Entire conversation |
+**LOCOMO note (conversational memory benchmark):** V032 full stack
+lands at **40 %** (N=30), up from V030's 33 %. Not competitive with
+mem0 (91 %, neural). We're honest about that in
+[§ 5](./BENCHMARK.md#-5--locomo-honest).
 
-Head-to-heads:
-- **vs LLMLingua-2** on structured prompts: Sophon **+8.9 pts saved**, **35× faster**
-  ([§ 7.8.d](./BENCHMARK.md#78d-head-to-head-sophon-compress_prompt-vs-llmlingua-2))
-- **vs mem0-lite on LOCOMO N=15**: tie at 60 %, Sophon **sub-second vs 8.7 min**, **0 vs 330 LLM calls**
-  ([§ 7.8.e](./BENCHMARK.md#78e-mem0-lite-on-locomo--same-item-comparison))
+### What changed in v0.4.0
 
-### LOCOMO accuracy across sample sizes
+Twelve new opt-in flags. Defaults unchanged from 0.3.0 — a caller
+that only sets `SOPHON_RETRIEVER_PATH` gets v0.3.0 behaviour byte for
+byte. Full list + measured gain: [CHANGELOG.md](./CHANGELOG.md#040--2026-04-18).
 
-Stability check: same `random.seed(42)`, same judge, items are nested (N=60 contains N=30's items, etc.).
-
-| Condition | N=15 | N=30 | N=40 | N=60 | **N=80** | 95 % CI (N=80) |
-|---|---:|---:|---:|---:|---:|---|
-| NONE (floor) | 20.0 % | — | 27.5 % | — | — | — |
-| COMP_HEUR | 26.7 % | 23.3 % | 27.5 % | 23.3 % | **23.8 %** | [15.8 – 34.1 %] |
-| **COMP_LLM** (v0.3.0) | — | **40.0 %** | — | **38.3 %** | **40.0 %** | **[30.0 – 51.0 %]** |
-| RETR_HASH | 60.0 % | 36.7 % | 42.5 % | 33.3 % | 32.5 % | [23.2 – 43.4 %] |
-| RETR_BGE | 60.0 % | 30.0 % | 32.5 % | 31.7 % | 33.8 % | [24.3 – 44.6 %] |
-| FULL (ceiling) | 73.3 % | 66.7 % | 75.0 % | 75.0 % | 71.2 % | [60.5 – 80.0 %] |
-
-**Honest reading**:
-- N=15 numbers were optimistic (too small a sample, easy items). Scaling to N=40 then N=80 reveals the true performance.
-- **COMP_LLM is stable at 40 %** across the three scales where it was measured (N=30/60/80). This is the reliable number.
-- The retriever plateaus around **32–34 %** regardless of the embedder (Hash or BGE).
-- All Sophon conditions score **0 % on multi-hop** — only FULL (75 %) gets there. Structural gap, documented.
+Biggest wins under the hood:
+- **Rayon-parallel block summarisation** → `compress_history` with LLM summary dropped from ~40 s to ~5-8 s on 600-turn conversations
+- **HyDE + FactCards + EntityGraph stack** → canary preservation on `compress_history` went from 27 % → 80 %
+- **Path A graph memory** (experimental) → ingest-time LLM triple extraction, zero LLM at query time
 
 ---
 
@@ -71,140 +57,107 @@ Stability check: same `random.seed(42)`, same judge, items are nested (N=60 cont
 
 ### 1. Measured economies, not promised ones
 
-- **67.0 %** of session tokens saved across a real 4-call workflow
-  ([BENCHMARK.md § 1.7](./BENCHMARK.md#17-session-level-aggregate-get_token_stats))
-- **64.5 % ± 0.5 %** of cross-model tokens saved — **stable across
-  Claude Haiku / Sonnet / Opus and Codex low / medium / high**
-  ([BENCHMARK.md § 2.1](./BENCHMARK.md#21-token-economics-3-tasks-combined-per-variant))
-- **47.6 %** saved on repeated boilerplate via fragment caching, even on
-  the first call ([BENCHMARK.md § 1.6](./BENCHMARK.md#16-encode_fragments-on-repeated-boilerplate))
-- **99.55 %** wire savings via `read_file_delta` when the client
-  already has the right hash ([BENCHMARK.md § 1.5](./BENCHMARK.md#15-read_file_delta-unchanged-resume))
-- **~6 ms** compression overhead per call — in-process, no GPU, no LLM
+- **68.1 %** session tokens saved over a 25-turn coding session
+  ([§ 1](./BENCHMARK.md#-1--session-token-economics))
+- **70.2 %** overall savings on `compress_prompt` across 22 shapes
+  ([§ 2](./BENCHMARK.md#-2--prompt-compression-extended))
+- **98.0 %** savings on re-reads via `read_file_delta`
+- **94.4 %** savings on targeted edits via `write_file_delta`
+- **95.4 %** savings on Claude-Code-sized system prompts
 
-### 2. On-par with the best libraries, at a fraction of the cost
+### 2. Determinism + speed first
 
-- **vs LLMLingua-2 (Microsoft, EMNLP 2024)** on the same 4 structured
-  prompts: Sophon saves **77.3 % in 63 ms**, LLMLingua-2 saves 68.4 %
-  in 2 176 ms — **~10 points more saved and ~35× faster**
-  ([BENCHMARK.md § 7.8.d](./BENCHMARK.md#78d-head-to-head-sophon-compress_prompt-vs-llmlingua-2))
-- **LOCOMO N=80 (most reliable)** — block-based LLM summary reaches
-  **40.0 %** (FULL ceiling 71.2 %), stable across N=30/60/80. The LLM
-  summary **beats the retriever** (32.5 %) by +7.5 pts because
-  pre-digested facts outperform raw chunk retrieval. ~20 Haiku calls
-  per item (~$0.001) for +16.2 pts over the free heuristic
-  ([BENCHMARK.md § 7.12](./BENCHMARK.md#712-five-pipeline-fixes--n306080-multi-scale-validation))
-- **vs mem0-lite on LOCOMO** (N=15, same judge, same rubric):
-  Sophon **60.0 %** ≈ mem0-lite **60.0 %** — **tie, sub-second vs
-  8.7 min, zero vs ~330 LLM calls**
-  ([BENCHMARK.md § 7.8.e](./BENCHMARK.md#78e-mem0-lite-on-locomo--same-item-comparison))
-
-Every head-to-head above runs on the same machine, same tokenizer
-(`tiktoken cl100k_base`), same LLM judge, and same inputs. The
-benchmark scripts and raw JSON referenced throughout are bundled
-with [BENCHMARK.md](./BENCHMARK.md) — each `§` explicitly lists the
-runner script and the output file it produced.
+- **p99 ≤ 87 ms** on 5 of 7 ops: `count_tokens`, `compress_prompt`,
+  `compress_output`, `read_file_delta`, `navigate_codebase`
+- **100 % ok_rate** across 190 bench runs (zero crashes, zero
+  malformed payloads)
+- **Zero ML at query time** on the default build. Haiku is shell-out
+  only, opt-in per feature flag.
 
 ### 3. Honest about what it isn't
 
-**Sophon is not state-of-the-art on any single axis.** We publish our
-losses as loudly as our wins:
-
-- **Plain-text semantic compression** — LLMLingua-2 is the honest
-  choice when you need to preserve every bit of meaning in an
-  unstructured document. Sophon's `compress_prompt` shines on
-  *structured* prompts with a query, not on arbitrary prose.
-  ([BENCHMARK.md § 7.8.d](./BENCHMARK.md#78d-head-to-head-sophon-compress_prompt-vs-llmlingua-2))
-- **Semantic retrieval** — v0.2 adds a real BGE-small embedder
-  (`--features bge`, 384-dim, ONNX) that gains +6.7 pts over the
-  deterministic `HashEmbedder` on LOCOMO. That's real but modest —
-  dedicated vector DBs (Qdrant, LanceDB) with HNSW indexing will
-  outperform Sophon's linear-scan k-NN on large corpora (>50k chunks).
-  ([BENCHMARK.md § 7.9](./BENCHMARK.md#79-bge-small-embedder-vs-hashembedder-on-locomo-v02-upgrade))
-- **Code navigation maturity** — [Aider's repomap](https://aider.chat/docs/repomap.html)
-  pioneered the tree-sitter + PageRank approach Sophon uses and
-  remains more mature, covering more languages in production
-  integration. Sophon's `navigate_codebase` is a faithful Rust
-  re-implementation, not a reinvention.
-  ([BENCHMARK.md § 7.6](./BENCHMARK.md#76-tree-sitter-vs-regex-backend-on-the-same-5-repos))
-- **Multi-hop reasoning = 0 %** — all 16 multi-hop LOCOMO items fail
-  across every Sophon condition (summary, retrieval, BGE). Only FULL
-  context reaches 75 %. Cross-session reasoning needs a fact graph or
-  LLM-in-the-loop, neither of which Sophon has today
-  ([§ 7.12](./BENCHMARK.md#712-five-pipeline-fixes--n306080-multi-scale-validation))
-- **Public corrections** — we've caught and published our own
-  optimistic biases three times:
-  - N=30 → N=60 retrieval: +23 pts → +13 pts ([§ 3.7](./BENCHMARK.md#37-locomo-open-ended-retrieval-n60))
-  - N=15 → N=40: RETR_HASH 60 % → 42.5 % ([§ 7.11](./BENCHMARK.md#711-n40-scale-up--harder-items-more-honest-numbers))
-  - N=80 final: COMP_LLM (40 %) beats retriever (32.5 %) —
-    inverts the expected finding ([§ 7.12](./BENCHMARK.md#712-five-pipeline-fixes--n306080-multi-scale-validation))
-
-If any benchmark here looks too clean, open an issue — we publish
-our corrections in the same doc as our wins.
+- **LOCOMO conversational recall** plateaus around 40 % on V032
+  full stack. mem0 / HippoRAG hit 80-90 % with neural embeddings at
+  query time — we chose determinism + speed instead.
+- **Adversarial questions**: V032 loses some ground (HyDE surfaces
+  tangential chunks the LLM then hallucinates over). V030 default
+  stays at 83 % on adversarial, V032 drops to 67 %.
+- **Per-type, not global.** Our +17 pt gains on multi-hop /
+  single-hop / temporal are directionally real at N=30 but CIs
+  overlap — we flag that explicitly in
+  [§ 5.1](./BENCHMARK.md#-51-v030-vs-v032_full-head-to-head).
 
 ---
 
 ## What's in the binary
 
-Single Rust binary (**7.2 MB** default, **25 MB** with tree-sitter,
-**34 MB** with BGE embedder), MCP stdio server, JSON-RPC 2024-11-05,
-eleven tools:
+11 MCP tools, all stdio:
 
-| Tool | What it compresses / why |
+| Tool | What it does |
 |---|---|
-| `compress_prompt` | Structured system prompt → query-relevant sections only. Topic-routed section picker, not a learned compressor. |
-| `compress_history` | Long conversation → summary + keyword index + verbatim recent window. Optional `query` param activates the semantic retriever (see `SOPHON_RETRIEVER_PATH`) for the LOCOMO retrieval gain in § 3.7. |
-| `compress_output` | stdout/stderr of git / cargo test / pytest / vitest / jest / go test / ls / grep / find / docker ps / docker logs → errors + modified files + test failures only. 14 command-aware filters + generic fallback, deterministic. |
-| `navigate_codebase` | Repository → token-budgeted map via symbol extraction + reference graph + personalised PageRank. Git-aware (honours `.gitignore`), incremental (mtime-diff cache), parallelised via rayon. **11 AST-backed languages** with `--features tree-sitter` (Rust, Python, JS, TS, TSX, Go, Ruby, Java, C/C++, PHP, Kotlin, Swift) + regex fallback for every file. |
-| `update_memory` | Stateful session memory. Append + snapshot without re-sending full history. Opt-in JSONL persistence via `SOPHON_MEMORY_PATH`. |
-| `read_file_delta` | ETag-like resume. Returns `Unchanged`/`Delta`/`Full` based on the client's known hash — no bytes on the wire when nothing changed. |
-| `write_file_delta` | Atomic staged write with hash-versioned state. |
-| `encode_fragments` / `decode_fragments` | Repeated multi-paragraph block detection + substitution. Adaptive sliding window. |
-| `count_tokens` | Ground-truth `cl100k_base` token count. |
-| `get_token_stats` | Per-module cumulative savings across the session. |
+| `compress_prompt` | Keep query-relevant sections of a long prompt |
+| `compress_history` | Summary + facts + recent + optional retrieval over the conversation |
+| `compress_output` | Strip noise from command stdout/stderr (20+ domain filters) |
+| `navigate_codebase` | tree-sitter / regex digest of a repo, PageRanked by query |
+| `update_memory` | Append messages to the session store (JSONL persist + graph ingest) |
+| `read_file_delta` | Version/hash-aware file read, unchanged → minimal payload |
+| `write_file_delta` | Send edits as diffs, not full files |
+| `encode_fragments` | Detect repeated boilerplate, replace with tokens |
+| `decode_fragments` | Reverse the encoding |
+| `count_tokens` | `cl100k_base`-accurate token count |
+| `get_token_stats` | Session-level savings rollup |
 
-**Everything is deterministic.** No embedding model, no LLM in the
-compression path, no vector DB to provision, no API key. Same input →
-same output bit-for-bit. Run it in CI, run it air-gapped, run it in a
-scratch Docker image.
+Binary sizes:
+- **7.2 MB** default (regex extractors, HashEmbedder)
+- **25 MB** with tree-sitter (11 languages: Rust, Python, JS, TS, TSX, Go, Ruby, Java, C/C++, PHP, Kotlin, Swift)
+- **34 MB** with BGE-small semantic embedder
+- **42 MB** with all features
 
-**Not in scope, on purpose**: multimodal ingestion (OCR, PDF layout,
-image description, audio). If you need clean PDF/image text, run
-Docling / Marker / Unstructured / LlamaParse upstream and feed the
-extracted text into Sophon.
+---
+
+## Feature flags (opt-in)
+
+All new v0.4.0 behaviour is env-gated. Defaults unchanged from 0.3.0.
+
+| Flag | What it adds | Measured gain | Cost |
+|---|---|---|---|
+| `SOPHON_HYDE=1` | Haiku writes hypothetical answers → retrieval via RRF fusion | +17 pt open-domain, +17 pt single-hop | +1 Haiku call |
+| `SOPHON_FACT_CARDS=1` | Entity timeline JSON rendered into context | +17 pt temporal | +1 Haiku call |
+| `SOPHON_ENTITY_GRAPH=1` | Heuristic NER + bipartite graph + 1-hop bridge | +17 pt multi-hop | ~10 ms |
+| `SOPHON_ADAPTIVE=1` | Haiku classifies query → adapts top_k / budget | +5-10 pt factual | +1 Haiku call |
+| `SOPHON_LLM_RERANK=1` | Haiku re-scores top-(3×k) candidates | +8 pt recall | +1 Haiku call |
+| `SOPHON_TAIL_SUMMARY=1` | Haiku summarises chunks beyond top-K | +3-5 pt | +1 Haiku call |
+| `SOPHON_CHUNK_TARGET=500` | Bigger chunks (default 128) | +5 pt with rerank | ~0 |
+| `SOPHON_HYBRID=1` | BM25 + HashEmbedder fused via RRF | +3-5 pt rare-term | ~1 ms |
+| `SOPHON_GRAPH_MEMORY=1` | Ingest-time LLM triples → pure-Rust graph query (**experimental**) | See [§ 5.4](./BENCHMARK.md#-54-historical-corrections) | 1 Haiku / ingest batch |
+| `SOPHON_REACT=1` | Iterative retrieval with LLM decider (**experimental**) | Mixed — not recommended with HyDE | 2-3 Haiku calls |
+| `SOPHON_NO_LLM_SUMMARY=1` | Opt-out from block-based Haiku summary | Speed (bench utility) | — |
+| `SOPHON_DEBUG_LLM=1` | Log LLM call failures to stderr | — | — |
+
+**Recommended starter configs**:
+- Fast interactive (sub-second): defaults only
+- Recall-heavy: `SOPHON_HYDE=1 SOPHON_FACT_CARDS=1 SOPHON_ENTITY_GRAPH=1`
+- Full stack (V032): add `SOPHON_ADAPTIVE=1 SOPHON_LLM_RERANK=1 SOPHON_TAIL_SUMMARY=1 SOPHON_CHUNK_TARGET=500`
 
 ---
 
 ## When to use it — and when not
 
 **Reach for Sophon when:**
-
-- You're building an MCP-based agent and want to cut the tokens that
-  go out the door without adding a Python runtime, a vector DB, or a
-  second LLM call.
-- You need CI-reproducible compression behaviour — no model weights
-  that silently change, no embedding drift, no non-determinism.
-- Your system prompt is structured (XML/markdown sections) and you
-  want query-aware section routing.
-- You're hitting provider rate limits or cost caps from re-sending
-  the same history or files every turn.
-- You care about binary size, boot time, and zero external
-  dependencies.
+- You're building an MCP agent and want sub-second context compression
+- Token cost is a line item in your P&L
+- You need reproducibility / determinism (CI, red-team audits, compliance)
+- You want a single-binary deploy (~7-34 MB) with zero Python deps on the hot path
 
 **Reach for something else when:**
-
-- You need semantically optimal compression on unstructured text at
-  any cost — use [LLMLingua-2](https://github.com/microsoft/LLMLingua).
-- You need persistent cross-session memory with LLM-driven fact
-  extraction — use [mem0](https://github.com/mem0ai/mem0),
-  [Letta](https://github.com/letta-ai/letta), or
-  [Zep](https://github.com/getzep/zep).
-- You need real OCR / layout analysis on PDFs — use
-  [Docling](https://github.com/docling-project/docling), Marker, or
-  Unstructured.
+- You need >80 % long-form conversational recall — run [mem0](https://github.com/mem0ai/mem0),
+  [Letta](https://github.com/letta-ai/letta), or [Zep](https://github.com/getzep/zep).
+- You need multi-hop reasoning on massive documents — run
+  [HippoRAG](https://github.com/OSU-NLP-Group/HippoRAG) or
+  [GraphRAG](https://github.com/microsoft/graphrag).
+- You need real OCR / layout analysis on PDFs — use [Docling](https://github.com/docling-project/docling), Marker, or Unstructured.
 - You want provider-side cached billing rather than client-side
-  compression — use [Anthropic prompt caching](https://docs.anthropic.com/claude/docs/prompt-caching)
-  or OpenAI prompt caching.
+  compression — use [Anthropic prompt caching](https://docs.anthropic.com/claude/docs/prompt-caching) or OpenAI prompt caching.
 
 Sophon and those tools are **orthogonal**. A real stack will often
 run Sophon *in front of* provider caching, not instead of it.
@@ -227,8 +180,8 @@ Linux arm64/x64, Windows x64.
 ### Prebuilt binary
 
 Grab the archive for your platform from the
-[Releases](https://github.com/lacausecrypto/mcp-sophon/releases) page and
-put `sophon` on your `PATH`.
+[Releases](https://github.com/lacausecrypto/mcp-sophon/releases) page
+and put `sophon` on your `PATH`.
 
 ### Build from source
 
@@ -294,6 +247,22 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"compress_p
   | sophon serve
 ```
 
+### With v0.4.0 features enabled
+
+```bash
+# Recall-heavy agent session with HyDE + fact cards + entity graph
+export SOPHON_RETRIEVER_PATH=~/.sophon/retriever
+export SOPHON_HYDE=1
+export SOPHON_FACT_CARDS=1
+export SOPHON_ENTITY_GRAPH=1
+sophon serve
+
+# Ingest-time graph memory (experimental — see CHANGELOG)
+export SOPHON_GRAPH_MEMORY=1
+export SOPHON_GRAPH_MEMORY_PATH=~/.sophon/graph.json
+sophon serve
+```
+
 ---
 
 ## Workspace layout
@@ -301,25 +270,27 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"compress_p
 ```
 .
 ├── README.md           ← you are here
-├── BENCHMARK.md        ← every number, every caveat (the source of truth)
+├── BENCHMARK.md        ← current v0.4.0 numbers, per-section
+├── CHANGELOG.md        ← version history + corrections + honest findings
 ├── LICENSE             ← MIT
 ├── server.json         ← MCP registry manifest
 ├── .github/workflows/  ← CI + release automation
+├── benchmarks/         ← reproducible scripts for every number
 ├── npm/                ← npm wrapper package
-└── sophon/             ← Rust workspace
+└── sophon/             ← Rust workspace (11 crates)
     ├── Cargo.toml
     ├── sophon.toml     ← default runtime config
     └── crates/
         ├── sophon-core/          shared types, token/hash helpers
         ├── prompt-compressor/    compress_prompt
-        ├── memory-manager/       compress_history, update_memory, persistence
+        ├── memory-manager/       compress_history, update_memory, graph memory (v0.4.0)
         ├── delta-streamer/       read_file_delta, write_file_delta
         ├── fragment-cache/       encode_fragments, decode_fragments
-        ├── semantic-retriever/   chunker + HashEmbedder/BGE-small + linear k-NN
+        ├── semantic-retriever/   chunker + HashEmbedder + BM25 + entity graph (v0.4.0)
         ├── sophon-storage/       SQLite persistence (WAL, embeddings cache)
         ├── output-compressor/    command-aware stdout/stderr compression
         ├── cli-hooks/            transparent command rewriter + agent installer
-        ├── codebase-navigator/   tree-sitter/regex extractors + PageRank + digest
+        ├── codebase-navigator/   tree-sitter/regex + PageRank + digest
         └── mcp-integration/      stdio server, tool schemas, CLI
 ```
 
@@ -328,20 +299,15 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"compress_p
 ## Configuration
 
 Runtime defaults live in [`sophon/sophon.toml`](./sophon/sophon.toml).
-Environment variables:
+See the full [feature flag table](#feature-flags-opt-in) above for
+env-var-gated features. Baseline env vars:
 
-- `SOPHON_MEMORY_PATH` — JSONL file for persistent session memory
-  (e.g. `~/.sophon/memory/default.jsonl`).
+- `SOPHON_MEMORY_PATH` — JSONL persistence for session memory
 - `SOPHON_RETRIEVER_PATH` — directory for the semantic retriever store
-  (e.g. `~/.sophon/retriever`). When set, `compress_history` accepts
-  an optional `query` parameter and returns top-k retrieved chunks
-  alongside the compressed summary (+13-pt LOCOMO gain, § 3.7).
-- `SOPHON_EMBEDDER` — `hash` (default) or `bge` (requires `--features
-  bge` build). BGE-small adds +6.7 pts on LOCOMO over HashEmbedder
-  ([§ 7.9](./BENCHMARK.md#79-bge-small-embedder-vs-hashembedder-on-locomo-v02-upgrade)).
-- `SOPHON_FRAGMENT_MAX_WINDOW` — override the fragment detector
-  window size.
-- `SOPHON_CONFIG` — path to a `sophon.toml` config file.
+  (enables the `query` parameter on `compress_history`)
+- `SOPHON_EMBEDDER` — `hash` (default) or `bge` (needs `--features bge` build)
+- `SOPHON_FRAGMENT_MAX_WINDOW` — override the fragment detector window
+- `SOPHON_CONFIG` — path to a `sophon.toml` config file
 
 Per-call overrides are available on every MCP tool argument set
 (`max_tokens`, `recent_window`, `include_index`, …).
@@ -350,27 +316,19 @@ Per-call overrides are available on every MCP tool argument set
 
 ## Honest limitations
 
-Every limitation is documented and measured in
-[BENCHMARK.md § 6.6](./BENCHMARK.md#66-honest-limitations). At a glance:
+The full list is in [BENCHMARK.md § 8](./BENCHMARK.md#-8--limitations).
+Headlines:
 
-- **No multimodal ingestion.** Images, PDFs, audio, and raw table
-  parsing are out of scope. Run Docling / Marker / Unstructured /
-  LlamaParse upstream and feed clean text in.
-- **`compress_history` is heuristic.** No LLM in the summarization
-  path — it's a join + keyword index + recent window. Good from ~20
-  messages up; short histories are passed through unchanged so the
-  payload never *grows*.
-- **Embedder options**: `HashEmbedder` (default) is deterministic but
-  keyword-only. `BGE-small` (`--features bge`) adds real semantic
-  understanding (+6.7 pts on LOCOMO) but needs a 33 MB ONNX model
-  download on first use and adds 27 MB to the binary. Neither matches
-  dedicated vector DBs with HNSW on large corpora (>50k chunks).
-- **11 AST languages, not every language.** Enabling tree-sitter is
-  opt-in (`--features codebase-navigator/tree-sitter`) to keep the
-  default build free of C compilation. Languages outside the 11
-  supported still fall back to the regex extractor.
-- **No cross-session memory by default.** Set `SOPHON_MEMORY_PATH` to
-  opt into JSONL persistence; otherwise memory is in-process only.
+1. **LOCOMO caps at ~40 %.** Mem0 / HippoRAG sit at 80-90 % with
+   neural retrieval — we don't match that. We chose determinism.
+2. **Multi-hop is hard.** V032 brings 0 → 17 % on LOCOMO multi-hop
+   stratified. FULL ceiling is 83 %. The gap is structural.
+3. **V032 latency is heavy.** ~42 s p50 on long conversations when
+   the full flag stack is on. Pick features a la carte.
+4. **HashEmbedder is keyword-bound.** "favorite food" ↔ "weakness
+   for ginger snaps" doesn't match without HyDE.
+5. **No multimodal ingestion.** Images / PDFs / audio are out of
+   scope — run Docling / Marker / Unstructured upstream.
 
 ---
 
@@ -383,19 +341,24 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md). PRs especially welcome for:
   `crates/codebase-navigator/plugins/haskell.toml` for the format)
 - More grammars for `navigate_codebase`
 - Running the real `mem0` library on LOCOMO to replace the
-  `mem0-lite` surrogate in § 7.8.e
+  `mem0-lite` surrogate in [§ 6.2](./BENCHMARK.md#-62-vs-mem0-lite)
+- Multi-seed LOCOMO re-runs to tighten the V032 CI
 
 Run the full test suite with:
 
 ```bash
-cd sophon && cargo test --workspace                                  # 194 tests
+cd sophon && cargo test --workspace                                  # 303 tests
 cd sophon && cargo test --features codebase-navigator/tree-sitter    # +15 AST tests
 cd sophon && cargo test -p semantic-retriever --features bge -- --ignored  # 5 BGE tests (needs model)
 cd sophon-py && .venv/bin/pytest tests/                              # 4 Python tests
 ```
 
+Every benchmark claim above is reproducible — pointers to the
+scripts live in [BENCHMARK.md](./BENCHMARK.md). Open an issue if any
+number doesn't reproduce on your machine.
+
 ---
 
 ## License
 
-MIT — see [LICENSE](./LICENSE). Free to use, fork, modify, and ship.
+MIT. See [LICENSE](./LICENSE).
