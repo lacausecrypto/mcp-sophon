@@ -14,6 +14,47 @@ inputs.
 | `locomo_mem0lite.py` | mem0-lite LOCOMO run using `claude -p` as the LLM | [§ 7.8.e](../BENCHMARK.md#78e-mem0-lite-on-locomo--same-item-comparison) |
 | `repos_scan.py` | Scan 5 SHA-pinned GitHub repos | [§ 7.2 / § 7.8.b](../BENCHMARK.md#72-scanning-real-code) |
 | `repos_recall.py` | Recall@5 / @10 on real commits from those repos | [§ 7.3](../BENCHMARK.md#73-recall-on-real-commits) |
+| `llm_cli.py` | Universal CLI wrapper — normalises `claude` and `codex` output shapes into plain stdout. Used by the cross-model harness below. | — |
+| `locomo_cross_model.py` | 4-way LOCOMO run (V030 / V032_FULL × Stack A / Stack B) with parameterisable answerer and judge. Tests whether Sophon gains are provider-agnostic. | — |
+
+## Cross-model benches
+
+Sophon's internal LLM calls (block summaries, HyDE, fact cards, rerank, tail
+summary, classifier) shell out to whatever `SOPHON_LLM_CMD` points at, and
+the bench harness's answerer + judge are now parameterisable too. This
+lets you validate Sophon as provider-agnostic and confirm gains reproduce
+outside the default Claude-only setup.
+
+```bash
+# Default: Stack A = Sonnet answerer+judge, Stack B = codex answerer.
+# Internal Sophon LLM stays on Haiku so the RETRIEVAL stays fixed and
+# only the answering layer changes.
+python3 benchmarks/locomo_cross_model.py
+
+# All-Claude control (both stacks = Sonnet, but different models).
+CROSS_ANSWERER_A="python3 benchmarks/llm_cli.py --provider claude --model sonnet" \
+CROSS_ANSWERER_B="python3 benchmarks/llm_cli.py --provider claude --model opus" \
+python3 benchmarks/locomo_cross_model.py
+
+# Focused: adversarial items only, N=10 per type × 1 type
+CROSS_N=10 CROSS_TYPES=adversarial python3 benchmarks/locomo_cross_model.py
+```
+
+Env vars:
+
+| Var | Default | Role |
+|---|---|---|
+| `SOPHON_LLM_CMD` | `claude -p --model haiku --output-format json` | Internal Sophon LLM (summary / HyDE / FC / rerank / tail / classifier) |
+| `CROSS_ANSWERER_A` | `python3 benchmarks/llm_cli.py --provider claude --model sonnet` | Stack A answer model |
+| `CROSS_ANSWERER_B` | `python3 benchmarks/llm_cli.py --provider codex` | Stack B answer model |
+| `CROSS_JUDGE` | `python3 benchmarks/llm_cli.py --provider claude --model sonnet` | Shared judge (constant so the comparator is fixed) |
+| `CROSS_N` | `4` | Samples per question type |
+| `CROSS_TYPES` | all 5 LOCOMO types | Comma-separated filter |
+
+The harness reports per-type accuracy for each `V030 × Stack` and
+`V032_FULL × Stack` combination, plus two deltas — "same Sophon,
+different answerer" and "same answerer, different Sophon" — so
+it's obvious which axis drives any accuracy change.
 
 ## Environment variables
 
