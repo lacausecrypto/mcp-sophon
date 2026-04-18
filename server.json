@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.lacausecrypto/sophon",
   "title": "Sophon",
-  "description": "Honest token economics for MCP agents. Rust binary, zero ML at query time, reproducible benchmarks. 68% session tokens saved, 70% prompt compression at 36 ms, code retrieval recall@3 70%, p99 < 87 ms on 5/7 ops.",
+  "description": "Honest token economics for MCP agents. 68% tokens saved, zero-ML Rust binary.",
   "version": "0.4.0",
   "repository": {
     "url": "https://github.com/lacausecrypto/mcp-sophon",
