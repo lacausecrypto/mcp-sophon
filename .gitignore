@@ -58,3 +58,6 @@ benchmarks/data/
 benchmarks/*.json
 !benchmarks/*.py
 !benchmarks/*.md
+
+# MCP registry auth tokens — NEVER commit, they grant publish rights
+.mcpregistry_*
