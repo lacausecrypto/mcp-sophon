@@ -2080,10 +2080,13 @@ dependencies = [
  "chrono",
  "criterion",
  "once_cell",
+ "rayon",
  "regex",
  "serde",
  "serde_json",
+ "sha2",
  "sophon-core",
+ "tempfile",
  "thiserror 2.0.18",
  "uuid",
 ]

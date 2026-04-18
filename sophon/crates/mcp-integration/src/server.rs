@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use codebase_navigator::{Navigator, NavigatorConfig};
 use delta_streamer::DeltaStreamer;
 use fragment_cache::FragmentCache;
+use memory_manager::graph::GraphStore;
 use memory_manager::MemoryManager;
 use output_compressor::OutputCompressor;
 use prompt_compressor::PromptCompressor;
@@ -29,6 +30,14 @@ pub struct SophonServer {
     /// where the JSONL chunk store should live. Default off so existing
     /// `compress_history` callers see no behaviour change.
     pub retriever: Option<Retriever>,
+    /// Optional graph memory (Path A architecture). Activated by
+    /// `SOPHON_GRAPH_MEMORY=1`. When present, `update_memory` extracts
+    /// triples from new messages at ingestion time, and
+    /// `compress_history` queries the graph for relevant facts at
+    /// query time (pure Rust, zero LLM calls per query).
+    /// `SOPHON_GRAPH_MEMORY_PATH` selects the JSON snapshot location
+    /// for persistence across restarts.
+    pub graph_memory: Option<GraphStore>,
     pub stats: StatsCollector,
 }
 
@@ -76,6 +85,31 @@ impl SophonServer {
                 rcfg.multihop = std::env::var("SOPHON_MULTIHOP")
                     .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                     .unwrap_or(false);
+                // Hybrid (vector + BM25 sparse-lexical, fused via RRF):
+                // activated via SOPHON_HYBRID=1. Closes the rare-term /
+                // out-of-vocabulary gap of the pure HashEmbedder baseline.
+                rcfg.hybrid = std::env::var("SOPHON_HYBRID")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false);
+                // Chunk sizing overrides — Rec #1 from the bench audit
+                // showed that 128/256-token chunks often split an answer
+                // across boundaries. Doubling to 500/700 keeps related
+                // sentences in one chunk and makes verbatim top-K much
+                // more informative.
+                if let Ok(v) = std::env::var("SOPHON_CHUNK_TARGET") {
+                    if let Ok(n) = v.parse::<usize>() {
+                        if n >= 32 && n <= 4000 {
+                            rcfg.chunk_config.target_size = n;
+                        }
+                    }
+                }
+                if let Ok(v) = std::env::var("SOPHON_CHUNK_MAX") {
+                    if let Ok(n) = v.parse::<usize>() {
+                        if n >= rcfg.chunk_config.target_size && n <= 8000 {
+                            rcfg.chunk_config.max_size = n;
+                        }
+                    }
+                }
 
                 let embedder_choice = std::env::var("SOPHON_EMBEDDER")
                     .unwrap_or_default()
@@ -112,6 +146,35 @@ impl SophonServer {
             Err(_) => None,
         };
 
+        // Opt-in graph memory (Path A). Activated by SOPHON_GRAPH_MEMORY=1.
+        // Persistence path via SOPHON_GRAPH_MEMORY_PATH (JSON snapshot).
+        // Falls back to in-memory-only when no path is set.
+        let graph_memory = {
+            let enabled = std::env::var("SOPHON_GRAPH_MEMORY")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            if !enabled {
+                None
+            } else {
+                match std::env::var("SOPHON_GRAPH_MEMORY_PATH") {
+                    Ok(raw) => {
+                        let path = expand_tilde(&raw);
+                        match GraphStore::open(&path) {
+                            Ok(g) => Some(g),
+                            Err(e) => {
+                                eprintln!(
+                                    "[sophon] WARNING: could not open graph memory at {:?}: {}. Using in-memory only.",
+                                    path, e
+                                );
+                                Some(GraphStore::new())
+                            }
+                        }
+                    }
+                    Err(_) => Some(GraphStore::new()),
+                }
+            }
+        };
+
         Self {
             prompt_compressor: PromptCompressor::with_config(cfg.prompt),
             memory_manager,
@@ -120,6 +183,7 @@ impl SophonServer {
             output_compressor: OutputCompressor::default(),
             codebase_navigator: Navigator::new(NavigatorConfig::default()),
             retriever,
+            graph_memory,
             stats: StatsCollector::default(),
         }
     }

@@ -15,17 +15,23 @@
 //! See the workspace `BENCHMARK.md` for the LOCOMO open-ended results that
 //! motivated this module.
 
+pub mod bm25;
 pub mod chunker;
 pub mod embedder;
+pub mod entity_graph;
+pub mod fusion;
 pub mod index;
 pub mod reranker;
 pub mod retriever;
 pub mod store;
 
+pub use bm25::{Bm25Index, BM25_B, BM25_K1};
 pub use chunker::{chunk_messages, Chunk, ChunkConfig, ChunkType};
 #[cfg(feature = "bge")]
 pub use embedder::BgeEmbedder;
 pub use embedder::{Embedder, HashEmbedder};
+pub use entity_graph::{extract_entities as extract_graph_entities, EntityGraph};
+pub use fusion::{rrf_fuse, RRF_K};
 pub use index::VectorIndex;
 pub use reranker::{KeywordReranker, Reranker};
 pub use retriever::{

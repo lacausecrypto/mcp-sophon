@@ -1,15 +1,34 @@
+pub mod fact_cards;
 pub mod fact_extractor;
+pub mod graph;
 pub mod index;
+pub mod llm_client;
+pub mod llm_reranker;
 pub mod message;
+pub mod multihop;
+pub mod query_decomposer;
+pub mod query_rewriter;
+pub mod question_classifier;
+pub mod react;
 pub mod reconstructor;
 pub mod summarizer;
+pub mod tail_summary;
 
 use std::{fs, path::PathBuf};
 
+pub use fact_cards::{extract_fact_cards, FactCards, FactEvent};
 pub use fact_extractor::extract_facts;
+pub use llm_client::{call_llm, llm_cmd_is_configured};
+pub use llm_reranker::rerank_chunks;
 pub use message::{CompressedMemory, Fact, FactCategory, Message, Role};
+pub use multihop::is_likely_multihop;
+pub use query_decomposer::decompose_query;
+pub use query_rewriter::hyde_rewrite_query;
+pub use question_classifier::{classify_question, QuestionMode};
+pub use react::{react_decide, ReactDecision};
 pub use reconstructor::expand_memory;
 pub use summarizer::{compress_history, MemoryConfig};
+pub use tail_summary::summarise_tail;
 
 /// High-level facade for conversation memory compression.
 ///
