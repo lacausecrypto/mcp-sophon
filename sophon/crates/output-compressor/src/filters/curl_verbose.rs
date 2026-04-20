@@ -115,14 +115,31 @@ mod tests {
         let r = run_pipeline("curl -v https://api.example.com/v1/users", input, &f);
 
         // TLS noise must be gone.
-        assert!(!r.compressed.contains("TLSv1.3"), "TLS lines survived: {}", r.compressed);
-        assert!(!r.compressed.contains("Server certificate"), "cert info survived: {}", r.compressed);
+        assert!(
+            !r.compressed.contains("TLSv1.3"),
+            "TLS lines survived: {}",
+            r.compressed
+        );
+        assert!(
+            !r.compressed.contains("Server certificate"),
+            "cert info survived: {}",
+            r.compressed
+        );
         assert!(!r.compressed.contains("ALPN"), "ALPN lines survived");
 
         // Request + response stay.
-        assert!(r.compressed.contains("> GET /v1/users HTTP/2"), "request line dropped");
-        assert!(r.compressed.contains("< HTTP/2 200"), "response status dropped");
-        assert!(r.compressed.contains("content-type"), "response header dropped");
+        assert!(
+            r.compressed.contains("> GET /v1/users HTTP/2"),
+            "request line dropped"
+        );
+        assert!(
+            r.compressed.contains("< HTTP/2 200"),
+            "response status dropped"
+        );
+        assert!(
+            r.compressed.contains("content-type"),
+            "response header dropped"
+        );
         assert!(r.compressed.contains("Alice"), "body dropped");
 
         // The "connection left intact" outcome line is kept.

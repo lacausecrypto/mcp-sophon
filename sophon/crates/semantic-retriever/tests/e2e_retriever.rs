@@ -154,7 +154,11 @@ fn e2e_cached_embeddings_survive_reopen_and_match_freshly_computed() {
         let mut r = Retriever::open(cfg_with_path(path.clone())).expect("open");
         let msgs = vec![
             msg(0, ChunkInputRole::User, "embed me exactly once, please"),
-            msg(1, ChunkInputRole::Assistant, "understood — single-embed guarantee"),
+            msg(
+                1,
+                ChunkInputRole::Assistant,
+                "understood — single-embed guarantee",
+            ),
         ];
         r.index_messages(&msgs).expect("index");
         let result = r.retrieve("embed exactly").expect("retrieve");
