@@ -226,7 +226,7 @@ fn e2e_hash_embedder_is_deterministic_across_reopens() {
             msg(
                 1,
                 ChunkInputRole::User,
-                "deterministic embedding anchor two",
+                "deterministic embedding anchor solitaire",
             ),
             msg(
                 2,
@@ -238,7 +238,11 @@ fn e2e_hash_embedder_is_deterministic_across_reopens() {
     }
 
     // Compare two independent reopens — same query must return same
-    // top chunk with the same score.
+    // top chunk with the same score. The query intentionally contains
+    // a keyword only one chunk owns (`solitaire`) so the cosine ranking
+    // has a unique winner — tied scores would otherwise hit the
+    // HashMap-iteration tiebreak path, which is stable within a single
+    // process but can differ across OSes (observed on Windows CI).
     let run = |query: &str| -> (String, f32) {
         let r = Retriever::open(cfg_with_path(path.clone())).expect("reopen should succeed");
         let result = r.retrieve(query).expect("retrieve should succeed");
@@ -246,10 +250,14 @@ fn e2e_hash_embedder_is_deterministic_across_reopens() {
         (top.chunk.content.clone(), top.score)
     };
 
-    let q = "deterministic anchor";
+    let q = "deterministic anchor solitaire";
     let (c1, s1) = run(q);
     let (c2, s2) = run(q);
     assert_eq!(c1, c2, "deterministic top chunk content drift");
+    assert!(
+        c1.contains("solitaire"),
+        "query-unique keyword should pull the matching chunk to rank 0, got {c1:?}"
+    );
     assert!(
         (s1 - s2).abs() < 1e-6,
         "deterministic top chunk score drift: {s1} vs {s2}"
