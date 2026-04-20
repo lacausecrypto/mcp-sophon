@@ -115,52 +115,124 @@ Binary sizes:
 
 ---
 
-## Feature flags (opt-in)
+## Feature flags
 
-All new v0.4.0 behaviour is env-gated. Defaults unchanged from 0.3.0.
+Run `sophon doctor` to see every `SOPHON_*` env var currently set,
+with validation warnings and a note for deprecated recall-chasing
+flags. The full catalogue (24 flags, grouped by scope) lives in
+[`runtime_flags.rs`](./sophon/crates/mcp-integration/src/runtime_flags.rs).
 
-| Flag | What it adds | Measured gain | Cost |
-|---|---|---|---|
-| `SOPHON_HYDE=1` | Haiku writes hypothetical answers → retrieval via RRF fusion | +17 pt open-domain, +17 pt single-hop | +1 Haiku call |
-| `SOPHON_FACT_CARDS=1` | Entity timeline JSON rendered into context | +17 pt temporal | +1 Haiku call |
-| `SOPHON_ENTITY_GRAPH=1` | Heuristic NER + bipartite graph + 1-hop bridge | +17 pt multi-hop | ~10 ms |
-| `SOPHON_ADAPTIVE=1` | Haiku classifies query → adapts top_k / budget | +5-10 pt factual | +1 Haiku call |
-| `SOPHON_LLM_RERANK=1` | Haiku re-scores top-(3×k) candidates | +8 pt recall | +1 Haiku call |
-| `SOPHON_TAIL_SUMMARY=1` | Haiku summarises chunks beyond top-K | +3-5 pt | +1 Haiku call |
-| `SOPHON_CHUNK_TARGET=500` | Bigger chunks (default 128) | +5 pt with rerank | ~0 |
-| `SOPHON_HYBRID=1` | BM25 + HashEmbedder fused via RRF | +3-5 pt rare-term | ~1 ms |
-| `SOPHON_GRAPH_MEMORY=1` | Ingest-time LLM triples → pure-Rust graph query (**experimental**) | See [§ 5.4](./BENCHMARK.md#-54-historical-corrections) | 1 Haiku / ingest batch |
-| `SOPHON_REACT=1` | Iterative retrieval with LLM decider (**experimental**) | Mixed — not recommended with HyDE | 2-3 Haiku calls |
-| `SOPHON_NO_LLM_SUMMARY=1` | Opt-out from block-based Haiku summary | Speed (bench utility) | — |
-| `SOPHON_DEBUG_LLM=1` | Log LLM call failures to stderr | — | — |
+**On-thesis, still recommended:**
 
-**Recommended starter configs**:
-- Fast interactive (sub-second): defaults only
-- Recall-heavy: `SOPHON_HYDE=1 SOPHON_FACT_CARDS=1 SOPHON_ENTITY_GRAPH=1`
-- Full stack (V032): add `SOPHON_ADAPTIVE=1 SOPHON_LLM_RERANK=1 SOPHON_TAIL_SUMMARY=1 SOPHON_CHUNK_TARGET=500`
+| Flag | What it adds | Cost |
+|---|---|---|
+| `SOPHON_RETRIEVER_PATH=/dir` | Activate the semantic retriever (chunk store on disk). | ~0 |
+| `SOPHON_MEMORY_PATH=/file.jsonl` | Persistent conversation memory across `sophon serve` runs. | ~0 |
+| `SOPHON_HYBRID=1` | BM25 sparse-lexical + HashEmbedder fused via RRF. | ~1 ms |
+| `SOPHON_CHUNK_TARGET=500` | Bigger chunks preserve cross-sentence context. | ~0 |
+| `SOPHON_EMBEDDER=bge` | Swap HashEmbedder for BGE-small (needs `--features bge`). | +model load at startup |
+| `SOPHON_NO_LLM_SUMMARY=1` | Opt-out from Haiku summary; heuristic only. | Speed (bench utility) |
+| `SOPHON_DEBUG_LLM=1` | Richer tracing warnings for LLM subprocess failures. | — |
+
+**Deprecated (v0.4.0 recall-chasing experiments, scheduled for removal):**
+
+`SOPHON_HYDE`, `SOPHON_FACT_CARDS`, `SOPHON_ENTITY_GRAPH`,
+`SOPHON_ADAPTIVE`, `SOPHON_LLM_RERANK`, `SOPHON_TAIL_SUMMARY`,
+`SOPHON_REACT`, `SOPHON_GRAPH_MEMORY`, `SOPHON_MULTIHOP_LLM` —
+these chase LOCOMO recall, an axis we no longer optimise. Still
+functional but `sophon doctor` flags them. See
+[CHANGELOG.md § 0.5.0 Positioning re-scope](./CHANGELOG.md#050).
+If you need neural recall, pipe mem0 / Letta in front of Sophon
+instead (see [When to use](#when-to-use-it--sophon-in-front-of-x)
+below).
 
 ---
 
-## When to use it — and when not
+## When to use it — Sophon in front of X
 
-**Reach for Sophon when:**
-- You're building an MCP agent and want sub-second context compression
-- Token cost is a line item in your P&L
-- You need reproducibility / determinism (CI, red-team audits, compliance)
-- You want a single-binary deploy (~7-34 MB) with zero Python deps on the hot path
+Sophon is **not** a memory platform, a recall system, an OCR stack,
+or a replacement for provider-side caching. It's a deterministic
+context compressor that slots **in front of** whatever memory /
+cache / code-nav layer you already use, and attacks the tokens those
+layers can't.
 
-**Reach for something else when:**
-- You need >80 % long-form conversational recall — run [mem0](https://github.com/mem0ai/mem0),
-  [Letta](https://github.com/letta-ai/letta), or [Zep](https://github.com/getzep/zep).
-- You need multi-hop reasoning on massive documents — run
+The v0.5.0 positioning is explicit: Sophon stops chasing LOCOMO
+recall (mem0's territory) and doubles down on pure compression —
+tokens saved %, latency p99, binary size, canary preservation, MCP
+compliance. See [CHANGELOG.md](./CHANGELOG.md#050) for the re-scope
+note.
+
+### Sophon in front of Anthropic / OpenAI prompt caching
+
+Provider caching handles the **static** half of a request — system
+prompt, tool definitions, reused documents. It doesn't touch the
+dynamic half (growing conversation history, tool outputs). Sophon
+compresses exactly that half. The two stack cleanly.
+
+> Reproducible measurement:
+> [`benchmarks/sophon_plus_prompt_caching.py`](./benchmarks/sophon_plus_prompt_caching.py)
+> simulates a 25-turn agent session with a 6600-token cacheable
+> static block and claude-3.5-sonnet pricing. Sophon saves an
+> **additional 23.8 % tokens / ~49 % $** on top of prompt caching —
+> because the uncached dynamic block is billed at 10× the cached
+> rate, so every dynamic-token Sophon removes is worth ~10 cached
+> tokens in dollars.
+
+### Sophon in front of mem0 / Letta / Zep / Graphiti
+
+mem0 and friends retrieve the right memories. Sophon shrinks what
+gets sent to the LLM **after** retrieval. If mem0 returns 2 kB of
+raw memories, `compress_prompt` keeps only the sections the query
+actually references.
+
+> Reproducible measurement:
+> [`benchmarks/sophon_plus_mem0.py`](./benchmarks/sophon_plus_mem0.py)
+> runs against a surrogate mem0 retriever by default
+> (no API keys needed) or the real `mem0ai` package with
+> `--real-mem0`. It reports Sophon's **additional** savings + the
+> proper-noun / date / number preservation rate. Honest caveat
+> built-in: on very short mem0 outputs (< ~200 tokens) Sophon adds
+> overhead from its own wrapper — only pipe larger dumps through it.
+
+### Sophon in front of Claude Code / Cursor / Cline
+
+This is the primary use case. Every repeat file read becomes a
+`read_file_delta`; every shell command output goes through
+`compress_output`; every repeated boilerplate block gets swapped for
+a `fragment_cache` token. A 25-turn session drops from ~15 k
+tokens/turn to ~9 k tokens/turn.
+
+> Reproducible measurement:
+> [`benchmarks/session_token_economics.py`](./benchmarks/session_token_economics.py)
+> — **68.1 %** session tokens saved
+> ([§ 1](./BENCHMARK.md#-1--session-token-economics)).
+> Install with `sophon hook install --agent claude --global`.
+
+### Sophon in front of a RAG pipeline
+
+`navigate_codebase` produces a PageRanked repo digest that a RAG
+retriever would otherwise spend expensive embedding calls to build.
+Sophon emits it deterministically, with tree-sitter / regex symbol
+extraction over 11 languages, in under a second.
+
+---
+
+### When NOT to pipe Sophon in front of something
+
+- **Long-form conversational recall above 80 %** — Sophon caps at
+  ~40 % LOCOMO and we don't chase it. Run
+  [mem0](https://github.com/mem0ai/mem0) /
+  [Letta](https://github.com/letta-ai/letta) /
+  [Zep](https://github.com/getzep/zep) for recall, then optionally
+  pipe their output through Sophon (see above).
+- **Multi-hop reasoning on massive documents** — that's
   [HippoRAG](https://github.com/OSU-NLP-Group/HippoRAG) or
-  [GraphRAG](https://github.com/microsoft/graphrag).
-- You need real OCR / layout analysis on PDFs — use [Docling](https://github.com/docling-project/docling), Marker, or Unstructured.
-- You want provider-side cached billing rather than client-side
-  compression — use [Anthropic prompt caching](https://docs.anthropic.com/claude/docs/prompt-caching) or OpenAI prompt caching.
-
-Sophon and those tools are **orthogonal**. A real stack will often
-run Sophon *in front of* provider caching, not instead of it.
+  [GraphRAG](https://github.com/microsoft/graphrag)'s job.
+- **OCR / PDF layout analysis** — out of scope. Use
+  [Docling](https://github.com/docling-project/docling), Marker, or
+  Unstructured upstream of Sophon.
+- **Very small inputs (< ~200 tokens)** — Sophon's XML-tagged
+  section scaffolding can cost more than it saves. Pass through raw.
 
 ---
 

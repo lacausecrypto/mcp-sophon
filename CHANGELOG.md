@@ -9,6 +9,113 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 with additional **Measured** / **Honest findings** sections for bench
 results and failed experiments.
 
+## [0.5.0] — unreleased
+
+### Positioning re-scope: orthogonal compression only
+
+Sophon stops chasing LOCOMO conversational recall and re-anchors on
+pure context compression. Product thesis going forward:
+
+> Sophon is a deterministic compressor that slots **in front of**
+> whatever memory / cache / code-nav layer you already use — not a
+> replacement for mem0, Letta, Zep, or Anthropic prompt caching.
+
+Metrics we optimise:
+- tokens saved %, latency p50/p99, binary size, canary preservation,
+  MCP compliance.
+
+Metrics we no longer chase:
+- LOCOMO absolute accuracy, head-to-head neural recall benchmarks
+  against mem0 / HippoRAG.
+
+The v0.4.0 recall-chasing flags (`SOPHON_HYDE`, `SOPHON_FACT_CARDS`,
+`SOPHON_ENTITY_GRAPH`, `SOPHON_ADAPTIVE`, `SOPHON_LLM_RERANK`,
+`SOPHON_TAIL_SUMMARY`, `SOPHON_REACT`, `SOPHON_GRAPH_MEMORY`,
+`SOPHON_MULTIHOP_LLM`) remain functional but are now **deprecated**
+and flagged by `sophon doctor`. They will be removed in a future
+release.
+
+### Added — MCP protocol 2025-06-18
+
+- `initialize` advertises `protocolVersion: "2025-06-18"`, with
+  `capabilities.tools.listChanged` and `capabilities.logging` set.
+- `notifications/cancelled` is acknowledged and logged at DEBUG
+  (tool dispatch stays synchronous on the stdio loop; an async
+  rework is the next step).
+- JSON-RPC dispatch is now infallible — every error path produces a
+  spec-shaped error response instead of killing the stdio loop.
+- New stable Sophon server-error codes in the reserved
+  `-32000..-32099` range: `SOPHON_TOOL_NOT_FOUND (-32001)`,
+  `SOPHON_TOOL_ARGUMENTS_INVALID (-32002)`,
+  `SOPHON_TOOL_EXECUTION_FAILED (-32003)`,
+  `SOPHON_RETRIEVER_UNAVAILABLE (-32004)`,
+  `SOPHON_IO_ERROR (-32005)`,
+  `SOPHON_CONFIG_ERROR (-32006)`.
+- Tool-level errors keep MCP's `isError: true` result shape but now
+  include `structuredContent.error.code` so clients can branch on
+  the code without regex-matching English.
+
+### Added — observability (tracing)
+
+- `tracing 0.1` + `tracing-subscriber 0.3` workspace dependencies.
+- `sophon serve` installs a stderr subscriber with
+  `RUST_LOG`-controlled filter; defaults to `info`.
+- 18 production `eprintln!` calls replaced with `tracing::warn! /
+  info! / debug!` (memory-manager/llm_client, server.rs, main.rs,
+  output-compressor, codebase-navigator/extractors).
+
+### Added — `sophon doctor` subcommand
+
+Read-only installation diagnostic. Prints: binary metadata, resolved
+config source + parse status, every `SOPHON_*` env var in use
+(sanitised), path existence + writability checks for the persistence
+locations, LLM-command PATH probe, MCP client-config hints per
+agent. Flags deprecated recall-chasing env vars so users see the
+v0.5.0 trajectory.
+
+### Added — centralised `SOPHON_*` flag documentation
+
+`mcp-integration/src/runtime_flags.rs` enumerates every env var
+Sophon reads (24 flags, grouped by scope). Each entry carries name,
+kind (Bool / Path / String / UInt{min,max}), scope, and one-line
+description. Called at `sophon serve` startup: invalid values emit
+`tracing::warn` before the MCP handshake. New env vars MUST land
+here so they show up in `sophon doctor` and validation.
+
+### Added — orthogonal-stack benchmarks
+
+- `benchmarks/sophon_plus_prompt_caching.py` — measures additional
+  tokens / dollars Sophon saves on top of Anthropic prompt caching.
+  A 25-turn synthetic session at claude-3.5-sonnet pricing shows
+  **~24 % additional tokens / ~49 % additional $** saved. Includes a
+  live empirical probe against `compress_history` and
+  `compress_output` so the numbers aren't purely theoretical.
+- `benchmarks/sophon_plus_mem0.py` — Sophon's additional savings on
+  top of mem0 retrieval output. Defaults to a surrogate keyword-
+  gated retriever so the bench runs without API keys; pass
+  `--real-mem0` after `pip install mem0ai`. Honest caveat: on short
+  mem0 outputs (< ~200 tokens) Sophon adds overhead; the bench
+  reports this directly.
+
+### Changed — archive deprecated benchmarks
+
+`benchmarks/_deprecated/` holds four LOCOMO-adjacent scripts that
+targeted neural-recall parity with mem0 / HippoRAG: the new
+positioning makes them misleading. README in the archive directory
+documents the rationale.
+
+### Internal — tests + cleanup
+
+- 5 new `mcp-integration` integration tests guard the 2025-06-18
+  handshake, `notifications/cancelled`, structured error codes, and
+  `sophon doctor` output.
+- 6 new `semantic-retriever` end-to-end integration tests covering
+  the chunker → embedder → index → store → retrieve contract.
+- 6 new `codebase-navigator` end-to-end tests covering the polyglot
+  regex extraction path, PageRank query biasing, digest budget
+  enforcement, and TOML plugin loader.
+- Workspace test count: 303 (v0.4.0) → 405+.
+
 ## [0.4.0] — 2026-04-18
 
 ### Added — optional feature flags (defaults unchanged from 0.3.0)
