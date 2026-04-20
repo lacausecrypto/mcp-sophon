@@ -40,6 +40,20 @@ pure compression. Full rationale in
 | **Sophon + Anthropic prompt caching** | **+24 % tokens / +49 % $** on a 25-turn Claude-3.5-Sonnet session | [`sophon_plus_prompt_caching.py`](./benchmarks/sophon_plus_prompt_caching.py) |
 | **Sophon + mem0** | Depends on mem0 output size; the bench flags overhead on short dumps directly | [`sophon_plus_mem0.py`](./benchmarks/sophon_plus_mem0.py) |
 
+### New in v0.5.0 — single-binary efficiency
+
+Four lines every Python-based context layer would struggle to match. All measured against the v0.5.0 release binary on macOS arm64.
+
+| Metric | Value | Benchmark |
+|---|---|---|
+| **Binary on disk** | **8.7 MB** (release) | `stat` on the release target |
+| **Cold start → ready** | **10.6 ms** p50, **25 ms** p99 | [`cold_start_and_footprint.py`](./benchmarks/cold_start_and_footprint.py) |
+| **RSS after initialize** | **12.5 MB** | idem |
+| **Session scaling** (1 → 200 turns) | `update_memory` **0.1 ms** p50, flat; `compress_history` **4.2 ms** p50 / **50 ms** p99 | [`session_scaling_curve.py`](./benchmarks/session_scaling_curve.py) |
+| **`compress_output` coverage** | **81.6 %** weighted aggregate across 15 command families (git, cargo, docker, pytest, npm, kubectl, curl, tail, grep, …) | [`compress_output_per_command.py`](./benchmarks/compress_output_per_command.py) |
+
+Pass `--include-python-baseline` to `cold_start_and_footprint.py` to contrast against `python -c "import mem0"` / `sentence_transformers` / `langchain` on your machine.
+
 ### Carried over (still on-thesis, measured at v0.4.0 and unchanged)
 
 | Use case | Metric | Compared to |

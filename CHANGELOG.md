@@ -97,6 +97,38 @@ here so they show up in `sophon doctor` and validation.
   mem0 outputs (< ~200 tokens) Sophon adds overhead; the bench
   reports this directly.
 
+### Added — single-binary efficiency benchmarks
+
+Three new scripts that quantify the "one Rust binary, zero ML"
+positioning claim with numbers a Python-based stack can't match.
+No API keys, no network.
+
+- `benchmarks/cold_start_and_footprint.py` — spawn-to-ready time,
+  resident-set size at idle and after 100 tokenizer calls, release
+  binary size on disk. Pass `--include-python-baseline` to contrast
+  with `python -c "import mem0"`, `sentence_transformers`,
+  `langchain`. On macOS arm64 the v0.5.0 release binary measured:
+  **8.7 MB** on disk, **10.6 ms p50 / 25 ms p99** cold start,
+  **12.5 MB** RSS after initialize, +30 MB after a 100-call steady
+  state.
+- `benchmarks/compress_output_per_command.py` — per-command coverage
+  of `compress_output` across 15 realistic shell samples (git,
+  cargo, docker, pytest, npm install, kubectl get, curl -v, tail,
+  grep, ls, make, …). Reports weighted aggregate + mean + median
+  saved %, plus the filter and strategies Sophon routed each
+  sample through. Current run: **81.6 % weighted aggregate**, best
+  performers `tail` / `docker logs` / `ls` (90-99 %), worst
+  `git log` / `curl json` (already terse). Guides users on which
+  workflows benefit most from piping through Sophon.
+- `benchmarks/session_scaling_curve.py` — drives one long-lived
+  `sophon serve` from turn 1 → N and samples `update_memory_ms`,
+  `compress_history_ms`, token_count, RSS at each checkpoint. At
+  200 turns: update-memory stays **0.1 ms p50** (flat),
+  compress-history **4.2 ms p50 / 50 ms p99**, RSS growth
+  **+30 MB** (linear-ish in the JSONL store, bounded by token
+  budget). Catches any future regression that would make Sophon
+  O(turns²) or unbound RSS — pure sanity gate.
+
 ### Changed — archive deprecated benchmarks
 
 `benchmarks/_deprecated/` holds four LOCOMO-adjacent scripts that
