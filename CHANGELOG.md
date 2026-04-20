@@ -9,7 +9,104 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 with additional **Measured** / **Honest findings** sections for bench
 results and failed experiments.
 
-## [0.5.0] — unreleased
+## [0.5.1] — 2026-04-20
+
+Phase-1 follow-up to v0.5.0. Three targeted perf wins + two
+compression-ratio wins, all aligned with the v0.5.0 orthogonal
+positioning (no new LLM dependencies, no behaviour change for
+clients that don't opt in).
+
+### Perf — tracing, warm-up, embedding reuse
+
+- **`tracing::instrument` on the 5 hot-path entry points**:
+  `memory_manager::compress_history`,
+  `prompt_compressor::compress_prompt`,
+  `output_compressor::OutputCompressor::compress` (plus a
+  `debug!` with filter + strategies + ratio),
+  `semantic_retriever::Retriever::retrieve`, and
+  `Retriever::index_messages`. Zero runtime cost with
+  `RUST_LOG=off`; scriptable timelines with
+  `RUST_LOG=sophon=debug`. Added `tracing` dep to
+  `prompt-compressor` and `semantic-retriever` (the two crates
+  that didn't have it yet).
+
+- **Eager tokenizer warm-up at `sophon` startup**. One
+  `count_tokens("warmup")` call right after `init_tracing()`
+  loads tiktoken-rs BPE merge tables upfront instead of lazily
+  on the first real call. Measured on
+  `benchmarks/session_scaling_curve.py` at 200 turns:
+    * `update_memory` p99: **30.5 ms → 0.4 ms** (~75×)
+    * RSS idle:           **12.5 MB → 41.6 MB** (+29 MB now paid
+      at boot instead of spiking the first request)
+    * RSS after 100 calls: 42.0 MB → 41.8 MB (steady-state
+      delta collapses from +30 MB to +0.2 MB)
+
+- **JSONL store embedding reuse**. `Retriever::open` used to
+  re-embed every stored chunk on load; at 100k chunks that's
+  multi-second on the wrong side of the MCP handshake. The
+  `Chunk::embedding: Option<Vec<f32>>` field was already
+  populated by `index_messages` and serialised by the JSONL
+  store — we just weren't consuming the persisted vector on
+  reopen. Now we reuse it when the stored dimension matches
+  the current embedder, and re-embed only as a fallback (empty
+  embedding field or dimension mismatch after
+  `SOPHON_EMBEDDER=hash→bge` swap). Guarded by a new
+  integration test that asserts top-chunk score is
+  bit-identical across close/reopen.
+
+### Compression — two new filter wins
+
+Driven directly by the v0.5.0
+`benchmarks/compress_output_per_command.py` anomalies at 0.5 %
+(curl -v) and 11.8 % (git diff).
+
+- **New `curl_verbose` filter**. `curl -v` / `--verbose` /
+  `--trace*` output is ~60 % TLS handshake + cert-chain noise.
+  The existing `curl_json` filter kept `^\*` lines as signal
+  (correct for `-i` headers, wrong for `-v`). Dedicated filter
+  drops `^\*` noise while keeping `> GET ...`, `< HTTP/...`,
+  response headers, body, and the outcome marker. Registered
+  ahead of `curl_json`; plain `curl URL` still routes to
+  `curl_json`.
+    * **`curl -v` compression: 0.5 % → 60.3 % saved (+59.8 pt)**
+
+- **`git_diff_filter` dedup strategy**. Mechanical refactors
+  (rename applied across N call sites) produce diffs with
+  identical `-old` / `+new` hunk pairs. The pipeline now runs
+  `CompressionStrategy::Deduplicate` with
+  `similarity_threshold=1.0` (exact match only; no fuzzy
+  merge) between line-filter and truncate. Collapses runs of
+  identical consecutive lines to `<line>  // (× N)`.
+    * **`git diff HEAD~3` compression: 11.8 % → 51.8 % saved (+40.0 pt)**
+
+### Aggregate impact
+
+Rerun of `benchmarks/compress_output_per_command.py` across the
+same 15 canned samples:
+
+                         before (v0.5.0)   after (v0.5.1)
+  weighted aggregate     81.6 %            **83.1 %**
+  mean per-command       49.4 %            **56.0 %**
+  median per-command     48.4 %            **51.8 %**
+
+Rerun of `benchmarks/session_scaling_curve.py` at 200 turns:
+
+                              before (v0.5.0)   after (v0.5.1)
+  update_memory p99             30.5 ms          **0.4 ms**
+  compress_history p99          50.4 ms          49.2 ms
+  compress_history p50           4.2 ms          4.0 ms
+
+### Internal — tests + CI
+
+- 1 new integration test:
+  `e2e_cached_embeddings_survive_reopen_and_match_freshly_computed`
+  guards the embedding reuse round-trip.
+- 4 new unit tests around the `curl_verbose` filter + its
+  dispatcher precedence over `curl_json`.
+- Registry filter count: 20 → 21.
+- Workspace test count: 387 → 392.
+
+## [0.5.0] — 2026-04-20
 
 ### Positioning re-scope: orthogonal compression only
 
