@@ -118,6 +118,34 @@ documents the rationale.
 
 ## [0.4.0] — 2026-04-18
 
+### TL;DR (archived from the v0.4.0 README)
+
+Sophon was shaped around four use cases. Measured numbers:
+
+| Use case | Metric | Compared to |
+|---|---|---|
+| **Agent session token economics** | **68.1 % tokens saved** across 25-turn coding session ([§ 1](./BENCHMARK.md#-1--session-token-economics)) | Baseline: raw tokens |
+| **Prompt compression** | **70.2 % mean saved**, **36 ms mean latency**, 22 prompt shapes ([§ 2](./BENCHMARK.md#-2--prompt-compression-extended)) | LLMLingua-2: +8.9 pt at 35× lower latency ([§ 6.1](./BENCHMARK.md#-61-vs-llmlingua-2)) |
+| **Code retrieval (repo QA)** | **recall@3 = 70 %** on "where is X?" questions ([§ 4](./BENCHMARK.md#-4--repo-qa)) | grep: 10 % ; FULL context: 20 % |
+| **Latency + reliability** | **p99 < 87 ms** on 5/7 ops, **100 % ok_rate** on 190 runs ([§ 3](./BENCHMARK.md#-3--latency--reliability)) | Sub-second guaranteed |
+
+**LOCOMO note (conversational memory benchmark):** V032 full stack
+lands at **40 %** (N=30), up from V030's 33 %. Not competitive with
+mem0 (91 %, neural). Honest about that in
+[§ 5](./BENCHMARK.md#-5--locomo-honest). **v0.5.0 made this a
+deliberate non-goal** — see [§ 0.5.0 positioning re-scope](#050--unreleased).
+
+### What changed in v0.4.0
+
+Twelve new opt-in flags. Defaults unchanged from 0.3.0 — a caller
+that only sets `SOPHON_RETRIEVER_PATH` gets v0.3.0 behaviour byte
+for byte.
+
+Biggest wins under the hood:
+- **Rayon-parallel block summarisation** → `compress_history` with LLM summary dropped from ~40 s to ~5-8 s on 600-turn conversations
+- **HyDE + FactCards + EntityGraph stack** → canary preservation on `compress_history` went from 27 % → 80 %
+- **Path A graph memory** (experimental) → ingest-time LLM triple extraction, zero LLM at query time
+
 ### Added — optional feature flags (defaults unchanged from 0.3.0)
 
 All new behaviour is gated on env vars. Existing `compress_history`

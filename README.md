@@ -24,9 +24,23 @@ history + deprecated numbers live in [CHANGELOG.md](./CHANGELOG.md).
 
 ---
 
-## TL;DR — v0.4.0
+## TL;DR — v0.5.0
 
-Sophon is shaped around four use cases. Here's what we measured.
+Sophon is a **deterministic context compressor** that slots in front
+of whatever memory / cache / code-nav layer you already use — not
+instead of them. v0.5.0 is a positioning re-scope: we stopped chasing
+LOCOMO conversational recall (mem0's territory) and doubled down on
+pure compression. Full rationale in
+[CHANGELOG § 0.5.0](./CHANGELOG.md#050--unreleased).
+
+### New in v0.5.0 — orthogonal-stack economics
+
+| Stack | Additional saved by Sophon | Benchmark |
+|---|---|---|
+| **Sophon + Anthropic prompt caching** | **+24 % tokens / +49 % $** on a 25-turn Claude-3.5-Sonnet session | [`sophon_plus_prompt_caching.py`](./benchmarks/sophon_plus_prompt_caching.py) |
+| **Sophon + mem0** | Depends on mem0 output size; the bench flags overhead on short dumps directly | [`sophon_plus_mem0.py`](./benchmarks/sophon_plus_mem0.py) |
+
+### Carried over (still on-thesis, measured at v0.4.0 and unchanged)
 
 | Use case | Metric | Compared to |
 |---|---|---|
@@ -35,21 +49,30 @@ Sophon is shaped around four use cases. Here's what we measured.
 | **Code retrieval (repo QA)** | **recall@3 = 70 %** on "where is X?" questions ([§ 4](./BENCHMARK.md#-4--repo-qa)) | grep: 10 % ; FULL context: 20 % |
 | **Latency + reliability** | **p99 < 87 ms** on 5/7 ops, **100 % ok_rate** on 190 runs ([§ 3](./BENCHMARK.md#-3--latency--reliability)) | Sub-second guaranteed |
 
-**LOCOMO note (conversational memory benchmark):** V032 full stack
-lands at **40 %** (N=30), up from V030's 33 %. Not competitive with
-mem0 (91 %, neural). We're honest about that in
-[§ 5](./BENCHMARK.md#-5--locomo-honest).
+### Protocol + DX changes in v0.5.0
 
-### What changed in v0.4.0
+- **MCP protocol `2025-06-18`** — adds `notifications/cancelled`,
+  structured JSON-RPC error codes (`-32000..-32099` reserved range
+  for Sophon server errors), and an infallible dispatcher so a
+  single malformed request can no longer kill the stdio loop.
+- **`sophon doctor`** — read-only installation diagnostic: binary
+  + resolved config + every `SOPHON_*` flag in use + path
+  writability + LLM-command PATH probe + MCP-client config
+  hints. Also surfaces deprecated recall-chasing flags.
+- **Observability** — 18 `eprintln!` replaced with `tracing`;
+  filter via `RUST_LOG=sophon=debug`.
+- **Tests** — workspace count 303 (v0.4.0) → 405+.
 
-Twelve new opt-in flags. Defaults unchanged from 0.3.0 — a caller
-that only sets `SOPHON_RETRIEVER_PATH` gets v0.3.0 behaviour byte for
-byte. Full list + measured gain: [CHANGELOG.md](./CHANGELOG.md#040--2026-04-18).
+### What stopped being a goal
 
-Biggest wins under the hood:
-- **Rayon-parallel block summarisation** → `compress_history` with LLM summary dropped from ~40 s to ~5-8 s on 600-turn conversations
-- **HyDE + FactCards + EntityGraph stack** → canary preservation on `compress_history` went from 27 % → 80 %
-- **Path A graph memory** (experimental) → ingest-time LLM triple extraction, zero LLM at query time
+Long-form conversational recall above ~40 % on LOCOMO is now
+explicitly out of scope. mem0 hits 91 % with neural retrieval; we
+**sit in front of mem0 instead**. The v0.4.0 recall-chasing flags
+(`SOPHON_HYDE`, `SOPHON_FACT_CARDS`, `SOPHON_ENTITY_GRAPH`,
+`SOPHON_LLM_RERANK`, `SOPHON_ADAPTIVE`, `SOPHON_TAIL_SUMMARY`,
+`SOPHON_REACT`, `SOPHON_GRAPH_MEMORY`, `SOPHON_MULTIHOP_LLM`) stay
+functional but are flagged by `sophon doctor` as deprecated and
+will be removed.
 
 ---
 
@@ -319,21 +342,24 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"compress_p
   | sophon serve
 ```
 
-### With v0.4.0 features enabled
+### Typical v0.5.0 setup
 
 ```bash
-# Recall-heavy agent session with HyDE + fact cards + entity graph
+# Default: zero-ML compression with BM25+Hash hybrid retrieval on
+# (on-thesis, deterministic, sub-ms overhead).
 export SOPHON_RETRIEVER_PATH=~/.sophon/retriever
-export SOPHON_HYDE=1
-export SOPHON_FACT_CARDS=1
-export SOPHON_ENTITY_GRAPH=1
+export SOPHON_HYBRID=1
+export SOPHON_MEMORY_PATH=~/.sophon/memory.jsonl
 sophon serve
 
-# Ingest-time graph memory (experimental — see CHANGELOG)
-export SOPHON_GRAPH_MEMORY=1
-export SOPHON_GRAPH_MEMORY_PATH=~/.sophon/graph.json
-sophon serve
+# Diagnose your install before wiring it into an MCP client
+sophon doctor
 ```
+
+The v0.4.0 recall-chasing flags (`SOPHON_HYDE`,
+`SOPHON_FACT_CARDS`, `SOPHON_ENTITY_GRAPH`, `SOPHON_GRAPH_MEMORY`,
+…) still parse but `sophon doctor` flags them as deprecated — see
+[CHANGELOG § 0.5.0](./CHANGELOG.md#050--unreleased).
 
 ---
 
