@@ -1,8 +1,8 @@
 {
   "name": "mcp-sophon",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "mcpName": "io.github.lacausecrypto/sophon",
-  "description": "Honest token economics for MCP agents. Deterministic context layer: prompt compression, conversation memory, code navigation, file delta, output compression. Single Rust binary, zero ML at query time, reproducible benchmarks. 68% session tokens saved on 25-turn agent session, 70% mean prompt compression at 36 ms, code retrieval recall@3 70% (vs grep 10%), p99 < 87 ms on 5/7 ops. Beats LLMLingua-2 by +8.9 pts at 35x lower latency; ties mem0 on LOCOMO at sub-second vs 8.7 min.",
+  "description": "Deterministic context compressor for MCP agents. Slots in front of prompt caching, mem0, Letta, or Claude Code — compresses prompts, conversation memory, code digests, file deltas, and shell output. Single Rust binary, zero ML at query time, MCP 2025-06-18. ~24% additional tokens / ~49% additional $ saved on top of Anthropic prompt caching. 68% session tokens saved on 25-turn agent session, 70% mean prompt compression at 36 ms, code retrieval recall@3 70% (vs grep 10%), p99 < 87 ms on 5/7 ops. Beats LLMLingua-2 by +8.9 pts at 35x lower latency.",
   "keywords": [
     "mcp",
     "model-context-protocol",
