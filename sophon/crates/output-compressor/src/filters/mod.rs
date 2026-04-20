@@ -2,6 +2,7 @@
 //! generic fallback at the end.
 
 pub mod curl_json;
+pub mod curl_verbose;
 pub mod docker;
 pub mod filesystem;
 pub mod generic;
@@ -53,7 +54,10 @@ impl FilterRegistry {
                 terraform::terraform_apply_filter(),
                 kubectl::kubectl_get_filter(),
                 kubectl::kubectl_describe_filter(),
-                // HTTP clients
+                // HTTP clients — verbose must win over the generic
+                // curl filter because it matches a stricter pattern
+                // (`-v` / `--verbose` / `--trace*`).
+                curl_verbose::curl_verbose_filter(),
                 curl_json::curl_json_filter(),
                 // Fallback MUST be last
                 generic::generic_filter(),
@@ -84,8 +88,22 @@ mod tests {
     #[test]
     fn registry_has_all_filters() {
         let r = FilterRegistry::new();
-        // 4 git + 4 tests + 3 fs + 2 docker + 2 pkg + 3 infra + 1 http + 1 generic = 20
-        assert_eq!(r.filter_count(), 20);
+        // 4 git + 4 tests + 3 fs + 2 docker + 2 pkg + 3 infra + 2 http + 1 generic = 21
+        assert_eq!(r.filter_count(), 21);
+    }
+
+    #[test]
+    fn curl_verbose_wins_over_curl_json() {
+        let r = FilterRegistry::new();
+        let f = r.find_filter("curl -v https://api.example.com/v1/users");
+        assert_eq!(f.name, "curl_verbose");
+    }
+
+    #[test]
+    fn plain_curl_still_routes_to_curl_json() {
+        let r = FilterRegistry::new();
+        let f = r.find_filter("curl https://api.example.com/v1/users");
+        assert_eq!(f.name, "curl_json");
     }
 
     #[test]

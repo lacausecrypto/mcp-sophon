@@ -98,7 +98,15 @@ pub fn git_push_pull_filter() -> FilterConfig {
     }
 }
 
-/// `git diff` — keep diff headers + +/- lines; skip index noise.
+/// `git diff` — keep diff headers + +/- lines, dedupe repeated hunks,
+/// then truncate long diffs.
+///
+/// Repeated boilerplate hunks (same `-old` / `+new` pair applied to
+/// every match of a refactor) would otherwise pass through verbatim.
+/// `Deduplicate` collapses runs of identical consecutive lines to
+/// `<line> (repeated N times)`, which crushes bulk renames /
+/// mechanical rewrites without losing the information that the
+/// change was uniform.
 pub fn git_diff_filter() -> FilterConfig {
     FilterConfig {
         name: "git_diff",
@@ -107,6 +115,14 @@ pub fn git_diff_filter() -> FilterConfig {
             CompressionStrategy::FilterLines {
                 remove_patterns: vec![rx(r"^index [0-9a-f]+\.\.[0-9a-f]+")],
                 keep_patterns: vec![rx(r"^(diff|---|\+\+\+|@@)"), rx(r"^[+-][^+-]")],
+            },
+            // Collapse identical consecutive `+` / `-` lines from
+            // mechanical refactors. `similarity_threshold=1.0` means
+            // exact match only — we don't want to fuzzy-merge
+            // semantically distinct hunks.
+            CompressionStrategy::Deduplicate {
+                similarity_threshold: 1.0,
+                output_format: "{line}  // (× {count})".to_string(),
             },
             CompressionStrategy::Truncate {
                 max_lines: 120,
