@@ -86,7 +86,7 @@ impl OutputCompressor {
 
         if self.config.tee_enabled {
             if let Err(e) = self.tee_raw(command, output) {
-                eprintln!("[output-compressor] tee error: {}", e);
+                tracing::warn!(error = %e, "output-compressor tee error");
             }
         }
 

@@ -7,6 +7,8 @@ use serde_json::json;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    init_tracing();
+
     let args = env::args().collect::<Vec<_>>();
 
     if args.len() < 2 {
@@ -132,14 +134,14 @@ fn run_codebase_scan(args: &[String]) -> anyhow::Result<()> {
     let digest = nav.digest(query.as_deref(), &dcfg);
     let digest_ms = t1.elapsed().as_secs_f64() * 1000.0;
 
-    eprintln!(
-        "[codebase-scan] prefer_git={} files={} symbols={} edges={} scan_ms={:.1} digest_ms={:.1}",
+    tracing::info!(
         prefer_git,
-        digest.total_files_scanned,
-        digest.total_symbols_found,
-        digest.edges_in_graph,
-        scan_ms,
-        digest_ms,
+        files = digest.total_files_scanned,
+        symbols = digest.total_symbols_found,
+        edges = digest.edges_in_graph,
+        scan_ms = %format!("{scan_ms:.1}"),
+        digest_ms = %format!("{digest_ms:.1}"),
+        "codebase-scan complete"
     );
 
     let mut output = serde_json::to_value(digest)?;
@@ -211,13 +213,13 @@ fn run_exec(args: &[String]) -> anyhow::Result<()> {
     // Emit a one-line footer on stderr so the caller (and the LLM, if
     // piping) sees the compression stats but the main output stays
     // clean.
-    eprintln!(
-        "[sophon-exec] filter={} original={}t compressed={}t ratio={:.3} strategies={:?}",
-        result.filter_name,
-        result.original_tokens,
-        result.compressed_tokens,
-        result.ratio,
-        result.strategies_applied
+    tracing::info!(
+        filter = %result.filter_name,
+        original_tokens = result.original_tokens,
+        compressed_tokens = result.compressed_tokens,
+        ratio = %format!("{:.3}", result.ratio),
+        strategies = ?result.strategies_applied,
+        "sophon-exec output compressed"
     );
 
     std::process::exit(status.code().unwrap_or(0));
@@ -365,4 +367,24 @@ fn run_hook(args: &[String]) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Install a `tracing_subscriber` that writes formatted events to stderr.
+/// Filter via `RUST_LOG` (e.g. `RUST_LOG=sophon=debug`); defaults to
+/// `info` so the `sophon-exec` / `codebase-scan` footers still appear as
+/// they did with `eprintln!`. Stdio MCP clients that parse stdout stay
+/// unaffected — tracing only writes to stderr.
+///
+/// Safe to call more than once (uses `try_init`) so sub-commands can
+/// re-invoke it without panicking if the global subscriber is already
+/// set.
+fn init_tracing() {
+    use tracing_subscriber::{fmt, EnvFilter};
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let _ = fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_target(false)
+        .without_time()
+        .try_init();
 }

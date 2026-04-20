@@ -241,7 +241,7 @@ impl ExtractorRegistry {
                     self.extractors.push(Box::new(ext));
                 }
                 Err(e) => {
-                    eprintln!("warning: failed to load plugin {:?}: {}", path, e);
+                    tracing::warn!(path = ?path, error = %e, "failed to load extractor plugin");
                 }
             }
         }

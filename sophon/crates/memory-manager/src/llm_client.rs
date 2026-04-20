@@ -6,6 +6,8 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+use tracing::{debug, warn};
+
 /// Default LLM command. Same default as the original inline summariser so
 /// existing deployments keep working.
 pub const DEFAULT_LLM_CMD: &str = "claude -p --model haiku";
@@ -14,23 +16,20 @@ pub const DEFAULT_LLM_CMD: &str = "claude -p --model haiku";
 /// a `String`, unwrapping `{"result": "..."}` JSON envelopes when present.
 /// Returns `None` if the command, spawn, or wait fails, or if stdout is empty.
 ///
-/// When `SOPHON_DEBUG_LLM=1` is set, all failure paths (spawn fail, non-zero
-/// exit, empty stdout, JSON parse fail) emit a diagnostic line to stderr
-/// with a tag, status code, and first 200 bytes of the child's stderr. This
-/// is how we audit silent failures during benches — rate-limit cascades,
-/// broken CLI, network hiccups all show up here instead of being masked as
-/// "fallback to heuristic".
+/// Failure paths (spawn fail, non-zero exit, empty stdout, JSON parse fail)
+/// emit tracing records at WARN (failures) or DEBUG (parse quirks) level —
+/// control visibility via `RUST_LOG=memory_manager::llm_client=debug`.
+/// `SOPHON_DEBUG_LLM=1` remains supported as a legacy gate that also routes
+/// the child's stderr into the captured diagnostics (off by default, cheaper).
 pub fn call_llm(prompt: &str) -> Option<String> {
-    let debug = std::env::var("SOPHON_DEBUG_LLM")
+    let capture_stderr = std::env::var("SOPHON_DEBUG_LLM")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
 
     let cmd_str = std::env::var("SOPHON_LLM_CMD").unwrap_or_else(|_| DEFAULT_LLM_CMD.to_string());
     let parts: Vec<&str> = cmd_str.split_whitespace().collect();
     if parts.is_empty() {
-        if debug {
-            eprintln!("[sophon-llm] FAIL: empty SOPHON_LLM_CMD");
-        }
+        warn!("empty SOPHON_LLM_CMD");
         return None;
     }
 
@@ -38,14 +37,16 @@ pub fn call_llm(prompt: &str) -> Option<String> {
         .args(&parts[1..])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(if debug { Stdio::piped() } else { Stdio::null() })
+        .stderr(if capture_stderr {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .spawn()
     {
         Ok(c) => c,
         Err(e) => {
-            if debug {
-                eprintln!("[sophon-llm] FAIL: spawn {:?}: {}", parts[0], e);
-            }
+            warn!(program = ?parts[0], error = %e, "spawn failed");
             return None;
         }
     };
@@ -58,38 +59,28 @@ pub fn call_llm(prompt: &str) -> Option<String> {
         match child.wait_with_output() {
             Ok(o) => o,
             Err(e) => {
-                if debug {
-                    eprintln!("[sophon-llm] FAIL: wait_with_output: {}", e);
-                }
+                warn!(error = %e, "wait_with_output failed");
                 return None;
             }
         }
     };
 
     if !output.status.success() {
-        if debug {
-            let stderr_head: String = String::from_utf8_lossy(&output.stderr)
-                .chars()
-                .take(200)
-                .collect();
-            eprintln!(
-                "[sophon-llm] FAIL: exit={:?} stderr={:?}",
-                output.status.code(),
-                stderr_head
-            );
-        }
+        let stderr_head: String = String::from_utf8_lossy(&output.stderr)
+            .chars()
+            .take(200)
+            .collect();
+        warn!(exit = ?output.status.code(), stderr = %stderr_head, "LLM exited non-zero");
         return None;
     }
 
     let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if raw.is_empty() {
-        if debug {
-            let stderr_head: String = String::from_utf8_lossy(&output.stderr)
-                .chars()
-                .take(200)
-                .collect();
-            eprintln!("[sophon-llm] FAIL: empty stdout, stderr={:?}", stderr_head);
-        }
+        let stderr_head: String = String::from_utf8_lossy(&output.stderr)
+            .chars()
+            .take(200)
+            .collect();
+        warn!(stderr = %stderr_head, "LLM emitted empty stdout");
         return None;
     }
 
@@ -98,17 +89,9 @@ pub fn call_llm(prompt: &str) -> Option<String> {
             if let Some(result) = v.get("result").and_then(|r| r.as_str()) {
                 return Some(result.to_string());
             }
-            if debug {
-                eprintln!(
-                    "[sophon-llm] WARN: JSON without 'result' key, raw head: {:?}",
-                    raw.chars().take(120).collect::<String>()
-                );
-            }
-        } else if debug {
-            eprintln!(
-                "[sophon-llm] WARN: non-JSON starting with '{{', raw head: {:?}",
-                raw.chars().take(120).collect::<String>()
-            );
+            debug!(head = %raw.chars().take(120).collect::<String>(), "JSON without 'result' key");
+        } else {
+            debug!(head = %raw.chars().take(120).collect::<String>(), "non-JSON starting with '{{'");
         }
     }
 

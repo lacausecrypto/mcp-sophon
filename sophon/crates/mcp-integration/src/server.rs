@@ -63,9 +63,10 @@ impl SophonServer {
             match memory_manager.clone().with_persistence(&expanded) {
                 Ok(mgr) => memory_manager = mgr,
                 Err(e) => {
-                    eprintln!(
-                        "[sophon] WARNING: could not open memory persistence file {:?}: {}",
-                        expanded, e
+                    tracing::warn!(
+                        path = ?expanded,
+                        error = %e,
+                        "could not open memory persistence file"
                     );
                 }
             }
@@ -118,12 +119,13 @@ impl SophonServer {
                 let result = match embedder_choice.as_str() {
                     #[cfg(feature = "bge")]
                     "bge" => {
-                        eprintln!("[sophon] Using BGE-small-en-v1.5 embedder (semantic)");
+                        tracing::info!("Using BGE-small-en-v1.5 embedder (semantic)");
                         match semantic_retriever::BgeEmbedder::new() {
                             Ok(bge) => Retriever::with_embedder(rcfg, std::sync::Arc::new(bge)),
                             Err(e) => {
-                                eprintln!(
-                                    "[sophon] WARNING: BGE embedder failed to load: {e}. Falling back to HashEmbedder."
+                                tracing::warn!(
+                                    error = %e,
+                                    "BGE embedder failed to load; falling back to HashEmbedder"
                                 );
                                 Retriever::open(rcfg)
                             }
@@ -135,9 +137,10 @@ impl SophonServer {
                 match result {
                     Ok(r) => Some(r),
                     Err(e) => {
-                        eprintln!(
-                            "[sophon] WARNING: could not open semantic retriever at {:?}: {}",
-                            dir, e
+                        tracing::warn!(
+                            path = ?dir,
+                            error = %e,
+                            "could not open semantic retriever"
                         );
                         None
                     }
@@ -162,9 +165,10 @@ impl SophonServer {
                         match GraphStore::open(&path) {
                             Ok(g) => Some(g),
                             Err(e) => {
-                                eprintln!(
-                                    "[sophon] WARNING: could not open graph memory at {:?}: {}. Using in-memory only.",
-                                    path, e
+                                tracing::warn!(
+                                    path = ?path,
+                                    error = %e,
+                                    "could not open graph memory; using in-memory only"
                                 );
                                 Some(GraphStore::new())
                             }
@@ -193,38 +197,80 @@ impl SophonServer {
     }
 
     /// Handle one JSON-RPC message for MCP stdio transport.
-    /// Returns `Ok(None)` for notifications that require no reply.
+    ///
+    /// Never returns `Err` — every failure mode is reported as a proper
+    /// JSON-RPC error response so the stdio loop is not killed by a
+    /// single malformed request. Returns `Ok(None)` only for incoming
+    /// notifications (no `id`) that require no reply.
+    ///
+    /// MCP protocol version advertised: `2025-06-18`. Cancellations are
+    /// acknowledged but not propagated — tool execution is synchronous
+    /// inside `handle_tool_call`, so there is no mid-flight interrupt
+    /// hook yet (see tracking note in the `notifications/cancelled`
+    /// arm).
     pub fn handle_json_rpc_message(&mut self, message: &Value) -> anyhow::Result<Option<Value>> {
+        use crate::jsonrpc::{
+            classify_anyhow, error_response, INVALID_PARAMS, METHOD_NOT_FOUND,
+            SOPHON_TOOL_NOT_FOUND,
+        };
+
         let method = message
             .get("method")
             .and_then(|m| m.as_str())
             .unwrap_or_default();
-        let id = message.get("id").cloned();
+        let raw_id = message.get("id").cloned();
+        let id = raw_id.clone().unwrap_or(Value::Null);
+        let is_notification = raw_id.is_none();
         let params = message.get("params").cloned().unwrap_or(Value::Null);
 
         match method {
             "initialize" => {
                 let response = json!({
                     "jsonrpc": "2.0",
-                    "id": id.unwrap_or(Value::Null),
+                    "id": id,
                     "result": {
-                        "protocolVersion": "2024-11-05",
+                        "protocolVersion": "2025-06-18",
                         "capabilities": {
-                            "tools": {}
+                            "tools": {
+                                "listChanged": false
+                            },
+                            "logging": {}
                         },
                         "serverInfo": {
                             "name": "sophon",
-                            "version": "1.0.0"
+                            "version": env!("CARGO_PKG_VERSION")
                         }
                     }
                 });
                 Ok(Some(response))
             }
             "notifications/initialized" => Ok(None),
+            "notifications/cancelled" => {
+                // MCP 2025-06-18 cancellation: client asks the server to
+                // stop processing a previously-issued request. Our tool
+                // dispatch is synchronous per message on the stdio loop,
+                // so by the time this notification is parsed, the
+                // targeted request has either finished or is in flight
+                // on the same thread with no interrupt point. We log and
+                // ACK — restoring the thread for truly async tool
+                // execution is out of scope for the initial 2025-06-18
+                // bump.
+                let req_id = params.get("requestId").cloned().unwrap_or(Value::Null);
+                let reason = params
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("(no reason)");
+                tracing::debug!(
+                    request_id = %req_id,
+                    reason = %reason,
+                    "received cancellation notification (no-op: tool dispatch is synchronous)"
+                );
+                Ok(None)
+            }
             "ping" => {
                 let response = json!({
                     "jsonrpc": "2.0",
-                    "id": id.unwrap_or(Value::Null),
+                    "id": id,
                     "result": {}
                 });
                 Ok(Some(response))
@@ -243,7 +289,7 @@ impl SophonServer {
 
                 let response = json!({
                     "jsonrpc": "2.0",
-                    "id": id.unwrap_or(Value::Null),
+                    "id": id,
                     "result": {
                         "tools": tools
                     }
@@ -251,10 +297,23 @@ impl SophonServer {
                 Ok(Some(response))
             }
             "tools/call" => {
-                let name = params
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("tools/call missing params.name"))?;
+                let Some(name) = params.get("name").and_then(|v| v.as_str()) else {
+                    return Ok(Some(error_response(
+                        id,
+                        INVALID_PARAMS,
+                        "tools/call missing params.name",
+                    )));
+                };
+                // Reject unknown tool names as a proper JSON-RPC error so
+                // clients can branch on the code (rather than parsing a
+                // free-form "unknown tool: frobnicate" string).
+                if !get_tool_definitions().iter().any(|t| t.name == name) {
+                    return Ok(Some(error_response(
+                        id,
+                        SOPHON_TOOL_NOT_FOUND,
+                        format!("unknown tool: {name}"),
+                    )));
+                }
                 let arguments = params
                     .get("arguments")
                     .cloned()
@@ -262,10 +321,11 @@ impl SophonServer {
 
                 match self.handle_tool_call(name, arguments) {
                     Ok(result) => {
-                        let result_text = serde_json::to_string(&result)?;
+                        let result_text = serde_json::to_string(&result)
+                            .unwrap_or_else(|_| "{}".to_string());
                         let response = json!({
                             "jsonrpc": "2.0",
-                            "id": id.unwrap_or(Value::Null),
+                            "id": id,
                             "result": {
                                 "content": [
                                     {"type": "text", "text": result_text}
@@ -277,13 +337,27 @@ impl SophonServer {
                         Ok(Some(response))
                     }
                     Err(err) => {
+                        let code = classify_anyhow(&err);
+                        let msg = err.to_string();
+                        tracing::warn!(tool = %name, code, error = %msg, "tool execution failed");
+                        // MCP tool-level error: returned inside `result`
+                        // with `isError: true`, NOT as a JSON-RPC error.
+                        // `structuredContent.error` mirrors the text
+                        // message with a machine-readable Sophon code so
+                        // clients can branch without regex.
                         let response = json!({
                             "jsonrpc": "2.0",
-                            "id": id.unwrap_or(Value::Null),
+                            "id": id,
                             "result": {
                                 "content": [
-                                    {"type": "text", "text": err.to_string()}
+                                    {"type": "text", "text": &msg}
                                 ],
+                                "structuredContent": {
+                                    "error": {
+                                        "code": code,
+                                        "message": &msg,
+                                    }
+                                },
                                 "isError": true
                             }
                         });
@@ -298,29 +372,36 @@ impl SophonServer {
                     let args = message.get("arguments").cloned().unwrap_or(Value::Null);
                     let legacy = match self.handle_tool_call(tool, args) {
                         Ok(result) => json!({"ok": true, "result": result}),
-                        Err(err) => json!({"ok": false, "error": err.to_string()}),
+                        Err(err) => {
+                            let code = classify_anyhow(&err);
+                            json!({
+                                "ok": false,
+                                "error": {
+                                    "code": code,
+                                    "message": err.to_string(),
+                                }
+                            })
+                        }
                     };
                     return Ok(Some(legacy));
                 }
 
-                if id.is_some() {
-                    let response = json!({
-                        "jsonrpc": "2.0",
-                        "id": id.unwrap_or(Value::Null),
-                        "error": {
-                            "code": -32601,
-                            "message": format!("method not found: {}", method)
-                        }
-                    });
-                    Ok(Some(response))
-                } else {
+                if is_notification {
+                    tracing::debug!(method = %method, "ignoring unknown notification");
                     Ok(None)
+                } else {
+                    Ok(Some(error_response(
+                        id,
+                        METHOD_NOT_FOUND,
+                        format!("method not found: {}", method),
+                    )))
                 }
             }
         }
     }
 
     pub async fn run_stdio(mut self) -> anyhow::Result<()> {
+        use crate::jsonrpc::{error_response, PARSE_ERROR};
         use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
         let stdin = io::stdin();
@@ -333,22 +414,30 @@ impl SophonServer {
             let parsed: Value = match serde_json::from_str(&line) {
                 Ok(value) => value,
                 Err(err) => {
-                    let error = json!({
-                        "jsonrpc": "2.0",
-                        "error": {
-                            "code": -32700,
-                            "message": format!("parse error: {}", err)
-                        }
+                    let error = error_response(
+                        Value::Null,
+                        PARSE_ERROR,
+                        format!("parse error: {}", err),
+                    );
+                    let serialized = serde_json::to_string(&error).unwrap_or_else(|_| {
+                        String::from(
+                            r#"{"jsonrpc":"2.0","error":{"code":-32700,"message":"parse error"}}"#,
+                        )
                     });
-                    out.write_all(format!("{}\n", serde_json::to_string(&error)?).as_bytes())
+                    out.write_all(format!("{}\n", serialized).as_bytes())
                         .await?;
                     out.flush().await?;
                     continue;
                 }
             };
 
+            // handle_json_rpc_message is infallible-by-design: every error
+            // path becomes a JSON-RPC error response. The `?` below only
+            // fires on unexpected panic-adjacent conditions; keep it so
+            // bugs surface instead of being silently swallowed.
             if let Some(response) = self.handle_json_rpc_message(&parsed)? {
-                out.write_all(format!("{}\n", serde_json::to_string(&response)?).as_bytes())
+                let serialized = serde_json::to_string(&response).unwrap_or_default();
+                out.write_all(format!("{}\n", serialized).as_bytes())
                     .await?;
                 out.flush().await?;
             }

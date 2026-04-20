@@ -13,6 +13,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 toml.workspace = true
+tracing.workspace = true
 walkdir = "2.5"
 ignore = "0.4"
 rayon = "1.10"
