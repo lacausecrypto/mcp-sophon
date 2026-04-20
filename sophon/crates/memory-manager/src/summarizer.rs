@@ -32,6 +32,14 @@ impl Default for MemoryConfig {
 /// return all messages in `recent_messages` with an empty summary. This
 /// avoids the pathological case where a 4-message chat produces a compressed
 /// payload *larger* than its input (observed as a v1 limitation).
+#[tracing::instrument(
+    skip_all,
+    fields(
+        messages = messages.len(),
+        max_tokens = config.max_tokens,
+        recent_window = config.recent_window,
+    ),
+)]
 pub fn compress_history(messages: &[Message], config: &MemoryConfig) -> CompressedMemory {
     if messages.is_empty() {
         return CompressedMemory {

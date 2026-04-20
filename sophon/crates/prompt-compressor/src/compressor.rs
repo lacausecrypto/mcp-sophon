@@ -82,6 +82,14 @@ fn default_topic_mappings() -> HashMap<String, Vec<String>> {
 /// included alongside the keyword-matched ones — this closes the gap
 /// where the keyword dictionary misses semantic equivalents ("loop" ≠
 /// "iteration" in keyword space, but ≈ 0.85 in embedding space).
+#[tracing::instrument(
+    skip_all,
+    fields(
+        sections = parsed.sections.len(),
+        max_tokens = config.max_tokens,
+        has_semantic_scores = section_scores.is_some(),
+    ),
+)]
 pub fn compress_prompt(
     parsed: &ParsedPrompt,
     analysis: &QueryAnalysis,

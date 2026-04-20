@@ -12,6 +12,7 @@ regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 sophon-core = { path = "../sophon-core" }
 
 [dev-dependencies]

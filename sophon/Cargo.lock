@@ -2667,6 +2667,7 @@ dependencies = [
  "serde_json",
  "sophon-core",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
@@ -3207,6 +3208,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokenizers 0.20.4",
+ "tracing",
 ]
 
 [[package]]

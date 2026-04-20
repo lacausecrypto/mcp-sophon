@@ -80,9 +80,25 @@ impl OutputCompressor {
     /// The `command` string is used to look up a command-aware filter
     /// (git / test / docker / etc.) and fall back to a generic filter
     /// otherwise.
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            command = %command,
+            input_chars = output.len(),
+        ),
+    )]
     pub fn compress(&self, command: &str, output: &str) -> CompressionResult {
         let filter = self.registry.find_filter(command);
         let result = strategy::run_pipeline(command, output, filter);
+
+        tracing::debug!(
+            filter = %result.filter_name,
+            strategies = ?result.strategies_applied,
+            original_tokens = result.original_tokens,
+            compressed_tokens = result.compressed_tokens,
+            ratio = %format!("{:.3}", result.ratio),
+            "compress_output result",
+        );
 
         if self.config.tee_enabled {
             if let Err(e) = self.tee_raw(command, output) {

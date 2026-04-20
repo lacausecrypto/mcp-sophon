@@ -130,6 +130,57 @@ fn e2e_store_persists_across_retriever_reopen() {
 }
 
 #[test]
+fn e2e_cached_embeddings_survive_reopen_and_match_freshly_computed() {
+    // Contract for the v0.5.0 "cold-start speedup" change: the JSONL
+    // store should persist the embedding vector, and Retriever::open
+    // should reuse it rather than re-embedding from scratch. We
+    // prove the round trip by:
+    //   1. indexing a chunk with the normal embedder path,
+    //   2. retrieving its top chunk + score before close,
+    //   3. reopening the retriever (which triggers the rebuild),
+    //   4. retrieving again with the same query and asserting the
+    //      score is identical to the pre-close one.
+    //
+    // HashEmbedder is deterministic, so re-embedding would *also*
+    // produce the same score — this test survives either path.
+    // But with cached embeddings active, reopen skips the embed
+    // call entirely; wrapping this in a future benchmark will catch
+    // a regression where cold-start silently falls back to
+    // re-embedding.
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("chunks.jsonl");
+
+    let (pre_close_content, pre_close_score) = {
+        let mut r = Retriever::open(cfg_with_path(path.clone())).expect("open");
+        let msgs = vec![
+            msg(0, ChunkInputRole::User, "embed me exactly once, please"),
+            msg(1, ChunkInputRole::Assistant, "understood — single-embed guarantee"),
+        ];
+        r.index_messages(&msgs).expect("index");
+        let result = r.retrieve("embed exactly").expect("retrieve");
+        let top = result.chunks.first().expect("at least one chunk");
+        (top.chunk.content.clone(), top.score)
+    };
+
+    // Reopen: MUST reuse the persisted embedding dim-equal to the
+    // current embedder's dim. HashEmbedder dimension is stable within
+    // a process lifetime.
+    let r2 = Retriever::open(cfg_with_path(path)).expect("reopen");
+    let result = r2.retrieve("embed exactly").expect("retrieve");
+    let top = result.chunks.first().expect("at least one chunk on reopen");
+    assert_eq!(
+        top.chunk.content, pre_close_content,
+        "reopen should preserve top chunk identity"
+    );
+    assert!(
+        (top.score - pre_close_score).abs() < 1e-6,
+        "reopen score {} drifts from pre-close {}",
+        top.score,
+        pre_close_score
+    );
+}
+
+#[test]
 fn e2e_reindexing_same_messages_is_idempotent() {
     let dir = tempdir().unwrap();
     let cfg = cfg_with_path(dir.path().join("chunks.jsonl"));

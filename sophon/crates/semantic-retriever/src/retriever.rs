@@ -166,17 +166,49 @@ impl Retriever {
         let mut bm25 = Bm25Index::new();
         let mut entity_graph = EntityGraph::new();
 
-        // Re-embed existing chunks. Embeddings are deterministic so this
-        // produces the same vectors as when they were first indexed.
-        // BM25 stats and the entity graph are also rebuilt here; the
-        // JSONL store is the authoritative source for all three.
+        // Rebuild the in-memory indexes from the JSONL store.
+        //
+        // Embeddings: use the pre-computed vector stored on the chunk
+        // when its dimension matches the current embedder (avoids a
+        // re-embed pass that dominated cold-start at large store
+        // sizes — 100k chunks × 0.2 ms HashEmbedder ≈ 20 s on the
+        // wrong side of a user waiting for the MCP handshake).
+        //
+        // We re-embed only when:
+        //   - the chunk has no stored embedding (pre-v0.5.0 data,
+        //     or an import from a different backend), OR
+        //   - the stored vector dimension doesn't match the current
+        //     embedder (e.g. user switched SOPHON_EMBEDDER=hash→bge).
+        //
+        // BM25 stats and the entity graph are always rebuilt from
+        // `chunk.content` — they're cheap and live in RAM only.
+        let expected_dim = embedder.dimension();
+        let mut reused = 0usize;
+        let mut reembedded = 0usize;
         for chunk in store.iter() {
-            let v = embedder.embed(&chunk.content)?;
+            let v: Vec<f32> = match &chunk.embedding {
+                Some(cached) if cached.len() == expected_dim => {
+                    reused += 1;
+                    cached.clone()
+                }
+                _ => {
+                    reembedded += 1;
+                    embedder.embed(&chunk.content)?
+                }
+            };
             index
                 .upsert(&chunk.id, &v)
                 .map_err(|e| RetrieverError::Index(e.to_string()))?;
             bm25.insert(&chunk.id, &chunk.content);
             entity_graph.insert_chunk(&chunk.id, &chunk.content);
+        }
+        if reused + reembedded > 0 {
+            tracing::debug!(
+                reused,
+                reembedded,
+                expected_dim,
+                "retriever index rebuilt from JSONL store",
+            );
         }
 
         Ok(Self {
@@ -225,6 +257,14 @@ impl Retriever {
 
     /// Index a batch of messages. Returns the number of *new* chunks
     /// actually written (existing chunks are skipped).
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            messages = messages.len(),
+            embedder = %self.embedder.name(),
+            hybrid = self.config.hybrid,
+        ),
+    )]
     pub fn index_messages(
         &mut self,
         messages: &[ChunkInputMessage<'_>],
@@ -249,6 +289,17 @@ impl Retriever {
     }
 
     /// Run a query against the indexed chunks.
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            query_chars = query.len(),
+            top_k = self.config.top_k,
+            min_score = self.config.min_score,
+            store_len = self.store.len(),
+            hybrid = self.config.hybrid,
+            multihop = self.config.multihop,
+        ),
+    )]
     pub fn retrieve(&self, query: &str) -> Result<RetrievalResult, RetrieverError> {
         let start = std::time::Instant::now();
 

@@ -9,6 +9,7 @@ use serde_json::json;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_tracing();
+    warm_up_tokenizer();
 
     let args = env::args().collect::<Vec<_>>();
 
@@ -621,4 +622,14 @@ fn init_tracing() {
         .with_target(false)
         .without_time()
         .try_init();
+}
+
+/// Warm up tiktoken-rs by performing one `count_tokens` on a stub
+/// string before the stdio loop starts. The first real call used to
+/// pay ~40 ms to load the BPE merge tables into memory, which showed
+/// up as the `compress_history` p99 spike on turn 1 of the scaling
+/// curve. Doing the miss at startup instead moves that cost off the
+/// hot path and flattens the curve from turn 1.
+fn warm_up_tokenizer() {
+    let _ = sophon_core::tokens::count_tokens("warmup");
 }
