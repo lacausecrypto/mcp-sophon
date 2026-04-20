@@ -321,8 +321,8 @@ impl SophonServer {
 
                 match self.handle_tool_call(name, arguments) {
                     Ok(result) => {
-                        let result_text = serde_json::to_string(&result)
-                            .unwrap_or_else(|_| "{}".to_string());
+                        let result_text =
+                            serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
                         let response = json!({
                             "jsonrpc": "2.0",
                             "id": id,
@@ -414,11 +414,8 @@ impl SophonServer {
             let parsed: Value = match serde_json::from_str(&line) {
                 Ok(value) => value,
                 Err(err) => {
-                    let error = error_response(
-                        Value::Null,
-                        PARSE_ERROR,
-                        format!("parse error: {}", err),
-                    );
+                    let error =
+                        error_response(Value::Null, PARSE_ERROR, format!("parse error: {}", err));
                     let serialized = serde_json::to_string(&error).unwrap_or_else(|_| {
                         String::from(
                             r#"{"jsonrpc":"2.0","error":{"code":-32700,"message":"parse error"}}"#,

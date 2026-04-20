@@ -136,8 +136,7 @@ mod tests {
 
     #[test]
     fn classify_io_error() {
-        let err: anyhow::Error =
-            std::io::Error::new(std::io::ErrorKind::NotFound, "boom").into();
+        let err: anyhow::Error = std::io::Error::new(std::io::ErrorKind::NotFound, "boom").into();
         assert_eq!(classify_anyhow(&err), SOPHON_IO_ERROR);
     }
 
