@@ -3,13 +3,13 @@
 > **Honest token economics for MCP agents.** One Rust binary. Zero ML at query time. Reproducible benchmarks.
 
 [![npm version](https://img.shields.io/npm/v/mcp-sophon.svg?color=blue)](https://www.npmjs.com/package/mcp-sophon)
-[![npm downloads](https://img.shields.io/npm/dm/mcp-sophon.svg)](https://www.npmjs.com/package/mcp-sophon)
+[![npm total downloads](https://img.shields.io/npm/dt/mcp-sophon.svg)](https://www.npmjs.com/package/mcp-sophon)
 [![GitHub release](https://img.shields.io/github/v/release/lacausecrypto/mcp-sophon?sort=semver)](https://github.com/lacausecrypto/mcp-sophon/releases)
 [![CI](https://github.com/lacausecrypto/mcp-sophon/actions/workflows/ci.yml/badge.svg)](https://github.com/lacausecrypto/mcp-sophon/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Rust 1.75+](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
-[![MCP](https://img.shields.io/badge/MCP-2024--11--05-purple.svg)](https://modelcontextprotocol.io)
-[![Tests](https://img.shields.io/badge/tests-303%20Rust%20%2B%204%20Python-brightgreen.svg)](./BENCHMARK.md)
+[![MCP](https://img.shields.io/badge/MCP-2025--06--18-purple.svg)](https://modelcontextprotocol.io)
+[![Tests](https://img.shields.io/badge/tests-387%20Rust%20%2B%204%20Python-brightgreen.svg)](./BENCHMARK.md)
 
 Sophon is a deterministic context layer for agents speaking the Model
 Context Protocol. It compresses prompts, conversation memory, code
