@@ -218,6 +218,99 @@ fn notifications_cancelled_is_acknowledged_silently() {
 }
 
 #[test]
+fn doctor_subcommand_runs_end_to_end_and_reports_known_sections() {
+    // Smoke test the `sophon doctor` binary entry point: build the
+    // release-shaped binary artefact through cargo, invoke it in a
+    // controlled env, and assert the six top-level sections appear
+    // in the output. Guards against a future refactor silently
+    // dropping e.g. the `[Paths]` block.
+    use std::process::Command;
+
+    // Locate the test binary that cargo just built. `CARGO_BIN_EXE_<bin>`
+    // is set by cargo for integration tests that share a package with
+    // the bin target.
+    let sophon_bin = env!("CARGO_BIN_EXE_sophon");
+
+    let output = Command::new(sophon_bin)
+        .arg("doctor")
+        // Neutralise any ambient SOPHON_* so the test is hermetic.
+        .env_clear()
+        // Keep PATH + HOME so LLM-command probe + tilde-expansion
+        // still work; the test doesn't assert on their outcome.
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("HOME", std::env::var("HOME").unwrap_or_default())
+        .output()
+        .expect("sophon doctor should be runnable");
+
+    assert!(
+        output.status.success(),
+        "sophon doctor failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for section in [
+        "Sophon Doctor",
+        "[Binary]",
+        "[Config]",
+        "[Runtime flags]",
+        "[Paths]",
+        "[LLM shell-out]",
+        "[MCP client config]",
+    ] {
+        assert!(
+            stdout.contains(section),
+            "doctor output missing section {section:?}: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn doctor_surfaces_deprecated_recall_flags_when_set() {
+    use std::process::Command;
+    let sophon_bin = env!("CARGO_BIN_EXE_sophon");
+    let output = Command::new(sophon_bin)
+        .arg("doctor")
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("HOME", std::env::var("HOME").unwrap_or_default())
+        .env("SOPHON_HYDE", "1")
+        .env("SOPHON_FACT_CARDS", "true")
+        .output()
+        .expect("sophon doctor should be runnable");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("deprecated recall-chasing flags active"),
+        "deprecated warning block missing: {stdout}"
+    );
+    assert!(stdout.contains("SOPHON_HYDE"));
+    assert!(stdout.contains("SOPHON_FACT_CARDS"));
+}
+
+#[test]
+fn doctor_reports_invalid_uint_as_warning() {
+    use std::process::Command;
+    let sophon_bin = env!("CARGO_BIN_EXE_sophon");
+    let output = Command::new(sophon_bin)
+        .arg("doctor")
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("HOME", std::env::var("HOME").unwrap_or_default())
+        .env("SOPHON_CHUNK_TARGET", "not-a-number")
+        .output()
+        .expect("sophon doctor should be runnable");
+    // Warnings do NOT fail the command — exit 0 is required.
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("warnings:"),
+        "warnings block missing for bogus SOPHON_CHUNK_TARGET: {stdout}"
+    );
+    assert!(stdout.contains("SOPHON_CHUNK_TARGET"));
+    assert!(stdout.contains("expected unsigned integer"));
+}
+
+#[test]
 fn tool_error_produces_is_error_with_structured_code() {
     // When a tool executes but returns an error, MCP requires the
     // response to be a `result` with `isError: true`. Sophon adds a

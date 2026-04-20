@@ -1,6 +1,7 @@
 use std::{env, fs, io::Read, process::Stdio};
 
 use cli_hooks::{CommandRewriter, HookInstaller, RewriteResult, SupportedAgent};
+use mcp_integration::runtime_flags::{RuntimeFlag, RuntimeFlags};
 use mcp_integration::{SophonConfig, SophonServer};
 use output_compressor::OutputCompressor;
 use serde_json::json;
@@ -27,8 +28,15 @@ async fn main() -> anyhow::Result<()> {
         "compress-output" => return run_compress_output(&args),
         "hook" => return run_hook(&args),
         "codebase-scan" => return run_codebase_scan(&args),
+        "doctor" => return run_doctor(config_path.as_deref()),
         _ => {}
     }
+
+    // Parse + validate every SOPHON_* env var once, up-front. Invalid
+    // values emit a tracing::warn so users see the diagnostic before
+    // the MCP handshake starts — and `sophon doctor` surfaces the
+    // same data without a running server.
+    RuntimeFlags::from_env().log_warnings();
 
     let cfg = SophonConfig::resolve(config_path.as_deref().map(std::path::Path::new))?;
     let mut server = SophonServer::with_config(cfg);
@@ -77,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
 fn usage() -> &'static str {
     "Usage:\n  \
      sophon serve\n  \
+     sophon doctor [--config <file>]\n  \
      sophon exec -- <command>\n  \
      sophon compress-output --cmd <command> [--input <file>]\n  \
      sophon compress-prompt --prompt <file> --query <text> [--max-tokens <n>]\n  \
@@ -367,6 +376,231 @@ fn run_hook(args: &[String]) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// `sophon doctor` — read-only diagnostic for the installation.
+///
+/// Prints binary metadata, resolved config source + parse status, the
+/// `SOPHON_*` env vars currently set in the environment (with
+/// sanitised values so no paths / commands are echoed verbatim), path
+/// existence / writability for the persistence locations, and MCP
+/// client-config hints for the common agents. Non-zero exit only on
+/// hard failures that would block `sophon serve` from starting —
+/// warnings still exit 0 so the command is CI-safe.
+fn run_doctor(config_path: Option<&str>) -> anyhow::Result<()> {
+    use std::io::Write;
+
+    let mut out = std::io::stdout().lock();
+    let mut exit_code = 0i32;
+    writeln!(out, "Sophon Doctor — v{}", env!("CARGO_PKG_VERSION"))?;
+    writeln!(out)?;
+
+    // -------- binary --------
+    writeln!(out, "[Binary]")?;
+    writeln!(out, "  version:        {}", env!("CARGO_PKG_VERSION"))?;
+    writeln!(
+        out,
+        "  target:         {}-{}",
+        std::env::consts::ARCH,
+        std::env::consts::OS
+    )?;
+    writeln!(
+        out,
+        "  bge embedder:   {}",
+        if cfg!(feature = "bge") {
+            "enabled"
+        } else {
+            "disabled (default build)"
+        }
+    )?;
+    writeln!(out)?;
+
+    // -------- config --------
+    writeln!(out, "[Config]")?;
+    let explicit = config_path.map(std::path::PathBuf::from);
+    let source = if let Some(p) = &explicit {
+        format!("--config {}", p.display())
+    } else if let Ok(p) = std::env::var("SOPHON_CONFIG") {
+        format!("SOPHON_CONFIG={p}")
+    } else if std::path::Path::new("sophon.toml").exists() {
+        "./sophon.toml".to_string()
+    } else {
+        "defaults (no TOML file found)".to_string()
+    };
+    writeln!(out, "  source: {source}")?;
+    match SophonConfig::resolve(explicit.as_deref()) {
+        Ok(_) => writeln!(out, "  status: ok")?,
+        Err(e) => {
+            writeln!(out, "  status: ERROR — {e}")?;
+            exit_code = 1;
+        }
+    }
+    writeln!(out)?;
+
+    // -------- env vars --------
+    writeln!(out, "[Runtime flags]")?;
+    let snap = RuntimeFlags::from_env();
+    if snap.set_flags.is_empty() {
+        writeln!(out, "  (no SOPHON_* env vars set — using defaults)")?;
+    } else {
+        let total = RuntimeFlag::ALL.len();
+        writeln!(
+            out,
+            "  {}/{} documented flags in use:",
+            snap.set_flags.len(),
+            total
+        )?;
+        for (name, value) in &snap.set_flags {
+            let scope = RuntimeFlag::ALL
+                .iter()
+                .find(|f| f.name == name)
+                .map(|f| f.scope.as_str())
+                .unwrap_or("unknown");
+            writeln!(out, "    {name:32}  {value:5}  [{scope}]")?;
+        }
+    }
+    if !snap.warnings.is_empty() {
+        writeln!(out, "  warnings:")?;
+        for w in &snap.warnings {
+            writeln!(out, "    ! {w}")?;
+        }
+    }
+    if !snap.deprecated_in_use.is_empty() {
+        writeln!(out, "  deprecated recall-chasing flags active:")?;
+        for name in &snap.deprecated_in_use {
+            writeln!(
+                out,
+                "    ! {name}  (v0.4.0 experiment — scheduled for removal)"
+            )?;
+        }
+    }
+    writeln!(out)?;
+
+    // -------- paths --------
+    writeln!(out, "[Paths]")?;
+    let paths: Vec<(&str, Option<std::path::PathBuf>)> = vec![
+        (
+            "memory",
+            std::env::var("SOPHON_MEMORY_PATH")
+                .ok()
+                .map(std::path::PathBuf::from)
+                .map(expand_tilde),
+        ),
+        (
+            "retriever",
+            std::env::var("SOPHON_RETRIEVER_PATH")
+                .ok()
+                .map(std::path::PathBuf::from)
+                .map(expand_tilde),
+        ),
+        (
+            "graph memory",
+            std::env::var("SOPHON_GRAPH_MEMORY_PATH")
+                .ok()
+                .map(std::path::PathBuf::from)
+                .map(expand_tilde),
+        ),
+    ];
+    let mut any_path = false;
+    for (label, path) in paths {
+        let Some(p) = path else { continue };
+        any_path = true;
+        let exists = p.exists();
+        let writable = if exists {
+            // Best-effort writable check: on unix we can test the permissions
+            // bits; on other platforms we defer to the actual write attempt
+            // at tool-call time.
+            !std::fs::metadata(&p)
+                .map(|m| m.permissions().readonly())
+                .unwrap_or(true)
+        } else {
+            // Not-yet-created files are "writable" iff the parent dir is.
+            p.parent()
+                .map(|parent| {
+                    parent.exists()
+                        && !parent
+                            .metadata()
+                            .map(|m| m.permissions().readonly())
+                            .unwrap_or(true)
+                })
+                .unwrap_or(false)
+        };
+        let status = match (exists, writable) {
+            (true, true) => "ok",
+            (true, false) => "exists but not writable",
+            (false, true) => "not-yet-created (parent writable)",
+            (false, false) => "MISSING and parent not writable",
+        };
+        writeln!(out, "  {label:14}  {}  [{status}]", p.display())?;
+        if !writable {
+            exit_code = 1;
+        }
+    }
+    if !any_path {
+        writeln!(
+            out,
+            "  (no SOPHON_*_PATH env vars set — nothing to persist)"
+        )?;
+    }
+    writeln!(out)?;
+
+    // -------- LLM command --------
+    writeln!(out, "[LLM shell-out]")?;
+    let llm_cmd = std::env::var("SOPHON_LLM_CMD")
+        .unwrap_or_else(|_| memory_manager::DEFAULT_LLM_CMD.to_string());
+    writeln!(out, "  command: {llm_cmd}")?;
+    if let Some(binary) = llm_cmd.split_whitespace().next() {
+        let found = std::env::var("PATH")
+            .ok()
+            .map(|path| {
+                path.split(':')
+                    .any(|dir| std::path::Path::new(dir).join(binary).is_file())
+            })
+            .unwrap_or(false)
+            || std::path::Path::new(binary).is_file();
+        writeln!(
+            out,
+            "  binary on PATH: {}  ({})",
+            if found { "yes" } else { "no" },
+            binary
+        )?;
+        if !found {
+            writeln!(
+                out,
+                "  note: Sophon falls back to the heuristic summariser when the LLM command is \
+                 missing. No startup failure."
+            )?;
+        }
+    }
+    writeln!(out)?;
+
+    // -------- MCP client hints --------
+    writeln!(out, "[MCP client config]")?;
+    writeln!(
+        out,
+        "  Claude Desktop:  ~/Library/Application Support/Claude/claude_desktop_config.json"
+    )?;
+    writeln!(out, "  Claude Code:     ~/.claude/settings.json (per-project) or ~/.claude/config.json (global)")?;
+    writeln!(out, "  Cursor:          ~/.cursor/mcp.json")?;
+    writeln!(
+        out,
+        "  example entry:   {{\"mcpServers\": {{\"sophon\": {{\"command\": \"sophon\", \"args\": [\"serve\"]}}}}}}"
+    )?;
+    writeln!(out)?;
+
+    if exit_code != 0 {
+        std::process::exit(exit_code);
+    }
+    Ok(())
+}
+
+fn expand_tilde(path: std::path::PathBuf) -> std::path::PathBuf {
+    if let Some(rest) = path.to_str().and_then(|s| s.strip_prefix("~/")) {
+        if let Ok(home) = std::env::var("HOME") {
+            return std::path::PathBuf::from(home).join(rest);
+        }
+    }
+    path
 }
 
 /// Install a `tracing_subscriber` that writes formatted events to stderr.

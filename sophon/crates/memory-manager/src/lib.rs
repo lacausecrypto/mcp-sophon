@@ -18,7 +18,7 @@ use std::{fs, path::PathBuf};
 
 pub use fact_cards::{extract_fact_cards, FactCards, FactEvent};
 pub use fact_extractor::extract_facts;
-pub use llm_client::{call_llm, llm_cmd_is_configured};
+pub use llm_client::{call_llm, llm_cmd_is_configured, DEFAULT_LLM_CMD};
 pub use llm_reranker::rerank_chunks;
 pub use message::{CompressedMemory, Fact, FactCategory, Message, Role};
 pub use multihop::is_likely_multihop;

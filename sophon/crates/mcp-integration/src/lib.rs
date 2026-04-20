@@ -1,6 +1,7 @@
 pub mod config;
 pub mod handlers;
 pub mod jsonrpc;
+pub mod runtime_flags;
 pub mod server;
 pub mod tools;
 
