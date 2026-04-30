@@ -3,7 +3,7 @@
   "name": "io.github.lacausecrypto/sophon",
   "title": "Sophon",
   "description": "Honest token economics for MCP agents. 68% tokens saved, zero-ML Rust binary.",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "repository": {
     "url": "https://github.com/lacausecrypto/mcp-sophon",
     "source": "github"
@@ -14,7 +14,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "mcp-sophon",
-      "version": "0.5.2",
+      "version": "0.5.3",
       "transport": {
         "type": "stdio"
       },

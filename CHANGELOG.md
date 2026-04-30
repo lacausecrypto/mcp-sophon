@@ -9,6 +9,128 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 with additional **Measured** / **Honest findings** sections for bench
 results and failed experiments.
 
+## [0.5.3] — 2026-04-30
+
+Tier 1 follow-up to v0.5.2. Three structural wins ship together:
+generic JSON compressor, tool-call dedup foundation, CI nightly
+regression alarm.
+
+### Feat — `CompressionStrategy::JsonStructural`
+
+`compress_output` gains a content-aware structural compressor:
+input that parses as JSON gets array-truncated and string-clipped
+**recursively** before line-level passes run. Single-byte sniff
+on `input.trim_start()` short-circuits non-JSON so the strategy
+is essentially free for plain text.
+
+Wired into 3 filters where JSON output is common:
+* `generic_filter` (catches `aws --output json`, `gh api`, etc.)
+* `curl_json_filter`
+* `kubectl_get_filter`
+
+Bug fix: when `JsonStructural` ran successfully, the legacy
+`budget_cap` middle-truncate would *destroy* the structure
+(reducing 5 carefully-preserved pods to `{` plus an omission
+marker because preserve_head was tuned for tabular output). Fixed
+by skipping `budget_cap` when `json_structural` is in
+`strategies_applied` — JsonStructural's array-length cap is
+already a hard upper bound.
+
+Bench `compress_output_per_command.py` extended with 3
+JSON-heavy samples (`kubectl get pods -o json` 50-pod blob,
+`aws s3api list-objects-v2` 80 objects, `gh api ...issues`
+40 issues). Aggregate moves:
+
+                          v0.5.2     v0.5.3
+  weighted aggregate      83.1 %     **90.1 %**  (+7 pt)
+  mean per-command        56.0 %     **62.4 %**  (+6.4 pt)
+  median per-command      51.8 %     **65.8 %**  (+14 pt)
+
+Per-command on the new samples:
+  kubectl get pods -o json     12892 → 1332   89.7 %
+  aws s3api list-objects        8612 →  238   97.2 %
+  gh api …/issues               8522 →  309   96.4 %
+
+### Feat — tool-call dedup foundation (chunker level)
+
+Two new `ChunkType` variants:
+
+```rust
+ChunkType::ToolUse        // tool invocation
+ChunkType::ToolResult     // result of a tool call
+```
+
+JSONL store stays backwards-compatible (serde
+`rename_all = "snake_case"` + new variants opt-in only when
+emitted).
+
+Detector functions in `chunker.rs` recognise:
+* Anthropic JSON `{"type":"tool_use","name":"X","input":{…}}`
+* Flattened transcript form `Tool call: X({"k":"v"})`
+* `{"type":"tool_result","tool_use_id":"…","content":"…"}`
+  (string or text-block array)
+
+Critical detail: argument JSON gets normalised via a `BTreeMap`
+detour so `{a:1,b:2}` and `{b:2,a:1}` produce byte-identical
+canonical strings. Two transcripts that emit the same call with
+different key orders no longer split a single semantic call
+across multiple chunks. Tested via
+`detect_tool_use_normalises_arg_order`.
+
+Five identical `read_file(path=X)` calls in one session now
+collapse to one chunk via the existing `chunk_id` (sha-of-content)
+mechanism.
+
+Honest scope: this is the **foundation**. The actual size of the
+dedup win depends on real Claude Code session shape (how often
+tools are called with identical args). A measured number is
+deferred to v0.5.4 once we capture real session traces with
+`tee_enabled`. What's mechanically guaranteed today: identical
+invocations produce one chunk, distinct args produce distinct
+chunks, arg-order variations don't split.
+
+### CI — bench nightly + baseline regression alarm
+
+New `benchmarks/run_all_with_baseline.py` driver runs the full
+bench suite, extracts key metrics, and compares against
+`benchmarks/baseline.json` (now committed in git).
+
+Per-metric tolerance + direction (regressions = drift in the bad
+direction past tolerance):
+
+  binary_size_bytes               5 %  min  (smaller = better)
+  cold_start_ms_p50              25 %  min
+  cold_start_ms_p99              30 %  min
+  rss_idle_mb                    25 %  min
+  aggregate_saved_pct             2 %  max  (higher = better)
+  mean_saved_pct                  5 %  max
+  compress_history_p50_ms        30 %  min
+  compress_history_p99_ms        50 %  min
+  update_memory_p99_ms           50 %  min
+
+Compression ratios are deterministic per binary (tight 2 %
+tolerance); latency carries CI scheduler jitter so it gets
+generous bands to avoid flake-fail. Improvements > 5 % are
+flagged as "wins worth refreshing the baseline" but don't fail
+the run.
+
+`.github/workflows/bench-nightly.yml` triggers:
+* `schedule: '0 3 * * *'` — daily catch on main
+* `pull_request` on `sophon/crates/**`, `benchmarks/**`,
+  `.github/workflows/bench-nightly.yml` — reviewers see drift
+  inline on perf-touching PRs
+* `workflow_dispatch` with `update_baseline=true` toggle that
+  commits the refreshed baseline back to the branch
+
+Concurrency group cancels stale runs on the same branch so
+fast iteration cycles don't queue up bench wall-clock.
+
+### Tests
+
+* output-compressor: 49 → **55** unit tests (+6 JsonStructural)
+* semantic-retriever: 59 → **68** unit tests (+9 tool-call)
+* Workspace total: 392 → **401**
+
 ## [0.5.2] — 2026-04-30
 
 Phase-2 of the post-v0.5.0 perf push. Two structural wins —
