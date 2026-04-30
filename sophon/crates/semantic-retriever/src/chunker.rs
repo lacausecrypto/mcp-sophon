@@ -42,6 +42,18 @@ pub enum ChunkType {
     AssistantResponse,
     SystemMessage,
     CodeBlock,
+    /// Agent tool invocation — Anthropic `{"type":"tool_use",
+    /// "name":"…","input":{…}}` shape, or the equivalent in other
+    /// MCP-style transcripts. Stored with a normalised
+    /// `tool:NAME({sorted_args_json})` content form so two
+    /// identical calls share the same chunk id and dedup
+    /// naturally.
+    ToolUse,
+    /// Result of a tool call. Less stable for dedup (tool_use_id
+    /// varies per invocation, results often include timestamps
+    /// or process state) but tagged so the retriever can prefer
+    /// or down-weight them per query.
+    ToolResult,
 }
 
 /// Configuration for the chunker.
@@ -105,6 +117,123 @@ impl ChunkInputRole {
 static CODE_BLOCK_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"```[a-zA-Z0-9_-]*\n([\s\S]*?)```").expect("valid code regex"));
 
+/// Detect an Anthropic-shaped `tool_use` block in the message
+/// content and return a normalised canonical form. The canonical
+/// form is `tool:NAME({sorted_args_json})` so two calls with the
+/// same name and args (even if argument keys are emitted in
+/// different orders) produce byte-identical chunks and dedup via
+/// `chunk_id`.
+///
+/// Recognised shapes:
+///
+/// * Plain JSON object: `{"type":"tool_use","name":"X","input":{…}}`
+/// * Pretty-printed equivalent (any indentation).
+/// * String form `Tool call: X({"key": "value"})` — common in
+///   transcripts saved by clients that flatten the JSON for
+///   readability.
+///
+/// Returns `None` when no recognisable tool-use shape is found.
+/// Conservative: when in doubt, treat as prose so we don't merge
+/// unrelated content via false-positive dedup.
+pub(crate) fn detect_tool_use(content: &str) -> Option<String> {
+    let trimmed = content.trim();
+
+    // Shape A: JSON object — must start with `{`.
+    if trimmed.starts_with('{') {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            if v.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                let name = v.get("name").and_then(|n| n.as_str())?;
+                let input = v.get("input").cloned().unwrap_or(serde_json::Value::Null);
+                return Some(format!("tool:{}({})", name, normalise_json(&input)));
+            }
+        }
+    }
+
+    // Shape B: flattened `Tool call: NAME(json)` line.
+    if let Some(rest) = trimmed.strip_prefix("Tool call: ") {
+        if let Some(open) = rest.find('(') {
+            let name = rest[..open].trim();
+            let args_str = rest[open + 1..].trim_end_matches(')');
+            if !name.is_empty() {
+                let parsed = serde_json::from_str::<serde_json::Value>(args_str)
+                    .unwrap_or_else(|_| serde_json::Value::String(args_str.to_string()));
+                return Some(format!("tool:{}({})", name, normalise_json(&parsed)));
+            }
+        }
+    }
+
+    None
+}
+
+/// Detect an Anthropic-shaped `tool_result` block. Returns the raw
+/// content with the wrapping metadata stripped — we keep the
+/// content because it's the actually-useful payload, but tag it
+/// `ChunkType::ToolResult` so the retriever can weight it
+/// differently.
+pub(crate) fn detect_tool_result(content: &str) -> Option<String> {
+    let trimmed = content.trim();
+    if !trimmed.starts_with('{') {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+    if v.get("type").and_then(|t| t.as_str()) != Some("tool_result") {
+        return None;
+    }
+    // Two valid shapes for content: a string or an array of content blocks.
+    let content_field = v.get("content")?;
+    let extracted = match content_field {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .filter_map(|item| {
+                item.get("text")
+                    .and_then(|t| t.as_str())
+                    .map(|s| s.to_string())
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => return None,
+    };
+    Some(extracted)
+}
+
+/// Recursively serialise a JSON value with object keys sorted, so
+/// `{a: 1, b: 2}` and `{b: 2, a: 1}` produce identical strings.
+/// `serde_json` doesn't sort by default; the BTreeMap detour does.
+fn normalise_json(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::Object(map) => {
+            // BTreeMap iterates in key order.
+            let sorted: std::collections::BTreeMap<&String, &serde_json::Value> =
+                map.iter().collect();
+            let mut s = String::from("{");
+            for (i, (k, val)) in sorted.iter().enumerate() {
+                if i > 0 {
+                    s.push(',');
+                }
+                s.push('"');
+                s.push_str(k);
+                s.push_str("\":");
+                s.push_str(&normalise_json(val));
+            }
+            s.push('}');
+            s
+        }
+        serde_json::Value::Array(items) => {
+            let mut s = String::from("[");
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    s.push(',');
+                }
+                s.push_str(&normalise_json(item));
+            }
+            s.push(']');
+            s
+        }
+        _ => v.to_string(),
+    }
+}
+
 /// Public entry point. Takes any iterator of `ChunkInputMessage` and emits
 /// the chunks in document order.
 pub fn chunk_messages(messages: &[ChunkInputMessage<'_>], config: &ChunkConfig) -> Vec<Chunk> {
@@ -112,6 +241,38 @@ pub fn chunk_messages(messages: &[ChunkInputMessage<'_>], config: &ChunkConfig) 
     let mut seen: HashSet<String> = HashSet::new();
 
     for msg in messages {
+        // Tool-call detection runs first so identical invocations
+        // dedup via the canonical form regardless of how the
+        // surrounding message was punctuated. Detected tool calls
+        // skip the prose / code-block path entirely — they're
+        // structurally distinct content.
+        if let Some(canonical) = detect_tool_use(msg.content) {
+            let chunk = build_chunk(
+                canonical,
+                ChunkType::ToolUse,
+                msg.index,
+                msg.timestamp,
+                msg.session_id,
+            );
+            if seen.insert(chunk.id.clone()) {
+                chunks.push(chunk);
+            }
+            continue;
+        }
+        if let Some(extracted) = detect_tool_result(msg.content) {
+            let chunk = build_chunk(
+                extracted,
+                ChunkType::ToolResult,
+                msg.index,
+                msg.timestamp,
+                msg.session_id,
+            );
+            if seen.insert(chunk.id.clone()) {
+                chunks.push(chunk);
+            }
+            continue;
+        }
+
         let mut prose = resolve_temporal_refs(msg.content, msg.timestamp);
 
         if config.extract_code {
@@ -727,5 +888,112 @@ mod tests {
                 || chunks.last().unwrap().content.contains("Thunderstorms"),
             "last chunk should contain the weather topic"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Tool-call detection + dedup (phase 3 / tier 1B)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn detect_tool_use_anthropic_shape() {
+        let blob = r#"{"type":"tool_use","name":"read_file","input":{"path":"src/main.rs"}}"#;
+        let canonical = detect_tool_use(blob).expect("should detect");
+        assert!(canonical.starts_with("tool:read_file("));
+        assert!(canonical.contains("\"path\":\"src/main.rs\""));
+    }
+
+    #[test]
+    fn detect_tool_use_normalises_arg_order() {
+        // Same call, different key emission order — must produce
+        // byte-identical canonical strings.
+        let a = r#"{"type":"tool_use","name":"grep","input":{"pattern":"foo","path":"src"}}"#;
+        let b = r#"{"type":"tool_use","name":"grep","input":{"path":"src","pattern":"foo"}}"#;
+        let ca = detect_tool_use(a).unwrap();
+        let cb = detect_tool_use(b).unwrap();
+        assert_eq!(ca, cb, "arg-order normalisation must produce identical canonical");
+    }
+
+    #[test]
+    fn detect_tool_use_flat_string_form() {
+        let blob = r#"Tool call: read_file({"path": "Cargo.toml"})"#;
+        let canonical = detect_tool_use(blob).expect("flat form should be recognised");
+        assert!(canonical.starts_with("tool:read_file("));
+        assert!(canonical.contains("Cargo.toml"));
+    }
+
+    #[test]
+    fn detect_tool_use_returns_none_for_prose() {
+        assert!(detect_tool_use("hello, can you read the file?").is_none());
+        assert!(detect_tool_use("{\"id\": 42}").is_none());
+        assert!(detect_tool_use("").is_none());
+    }
+
+    #[test]
+    fn detect_tool_result_extracts_content_string() {
+        let blob = r#"{"type":"tool_result","tool_use_id":"abc","content":"file contents here"}"#;
+        let extracted = detect_tool_result(blob).unwrap();
+        assert_eq!(extracted, "file contents here");
+    }
+
+    #[test]
+    fn detect_tool_result_extracts_array_form() {
+        let blob = r#"{"type":"tool_result","tool_use_id":"abc","content":[{"type":"text","text":"line 1"},{"type":"text","text":"line 2"}]}"#;
+        let extracted = detect_tool_result(blob).unwrap();
+        assert_eq!(extracted, "line 1\nline 2");
+    }
+
+    fn tool_msg(idx: usize, content: &'static str) -> ChunkInputMessage<'static> {
+        ChunkInputMessage {
+            index: idx,
+            role: ChunkInputRole::Assistant,
+            content,
+            timestamp: Utc::now(),
+            session_id: None,
+        }
+    }
+
+    #[test]
+    fn chunker_dedups_repeated_identical_tool_calls() {
+        // Same tool, same args, called 5 times — should produce
+        // exactly one chunk after dedup.
+        let raw = r#"{"type":"tool_use","name":"read_file","input":{"path":"src/lib.rs"}}"#;
+        let msgs: Vec<ChunkInputMessage<'_>> = (0..5).map(|i| tool_msg(i, raw)).collect();
+        let cfg = ChunkConfig::default();
+        let chunks = chunk_messages(&msgs, &cfg);
+        assert_eq!(
+            chunks.len(),
+            1,
+            "5 identical tool calls must dedup to 1 chunk, got {}",
+            chunks.len()
+        );
+        assert!(matches!(chunks[0].chunk_type, ChunkType::ToolUse));
+        assert!(chunks[0].content.starts_with("tool:read_file("));
+    }
+
+    #[test]
+    fn chunker_keeps_distinct_tool_calls_distinct() {
+        // Same tool, DIFFERENT args — must remain 2 separate chunks.
+        let calls = vec![
+            r#"{"type":"tool_use","name":"read_file","input":{"path":"a.rs"}}"#,
+            r#"{"type":"tool_use","name":"read_file","input":{"path":"b.rs"}}"#,
+        ];
+        let msgs: Vec<ChunkInputMessage<'_>> = calls
+            .iter()
+            .enumerate()
+            .map(|(i, c)| tool_msg(i, c))
+            .collect();
+        let cfg = ChunkConfig::default();
+        let chunks = chunk_messages(&msgs, &cfg);
+        assert_eq!(chunks.len(), 2, "different args → different chunks");
+    }
+
+    #[test]
+    fn chunker_tags_tool_results_separately() {
+        let result_blob = r#"{"type":"tool_result","tool_use_id":"abc","content":"ok"}"#;
+        let msgs = vec![tool_msg(0, result_blob)];
+        let chunks = chunk_messages(&msgs, &ChunkConfig::default());
+        assert_eq!(chunks.len(), 1);
+        assert!(matches!(chunks[0].chunk_type, ChunkType::ToolResult));
+        assert_eq!(chunks[0].content, "ok");
     }
 }
