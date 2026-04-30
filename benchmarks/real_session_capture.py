@@ -92,6 +92,101 @@ SOPHON = os.environ.get(
 )
 
 
+# ---------------------------------------------------------------------------
+# Anonymisation
+# ---------------------------------------------------------------------------
+#
+# When `--anonymise` is set, every potentially-sensitive piece of text
+# is scrubbed BEFORE it lands in any output channel (stdout, JSON,
+# logs). Compression measurements are still computed against the real
+# content (we have to feed the diff to sophon to measure it), but
+# nothing identifying ever leaves the bench.
+#
+# This matters because the obvious next step from a 93 % real-session
+# headline is "I should run this on my own repo" — and many of those
+# repos are private. Without anonymisation, a careless `--json | tee`
+# would leak commit subjects, author names, file paths.
+#
+# Default is OFF for this repo's own bench (everything's public on
+# GitHub already), but the script ships the flag so anyone running
+# against a private repo can opt in.
+
+def _conventional_prefix(subject: str) -> str:
+    """Extract the conventional-commit prefix (`feat`, `fix`, …) from
+    a subject line. Falls back to `(other)` if it doesn't match the
+    `<type>(<scope>)?: <message>` shape."""
+    for prefix in (
+        "feat", "fix", "chore", "style", "docs", "test", "perf",
+        "bench", "ci", "refactor", "build", "revert",
+    ):
+        if subject.startswith(prefix + "(") or subject.startswith(prefix + ":"):
+            return prefix
+    return "(other)"
+
+
+def is_sophon_own_repo() -> bool:
+    """Heuristic: are we running against this repo (mcp-sophon's
+    own dev history) or against someone else's?
+
+    The numbers from this repo are public on GitHub anyway, so
+    `--anonymise` is OFF by default for this case. For any other
+    repo we print a prominent warning suggesting the flag.
+
+    Detection: check if the workspace `Cargo.toml` declares the
+    `sophon` workspace (specific to this repo) AND the git remote
+    URL contains `mcp-sophon`. Both must match — false-positive
+    on someone who happens to fork this repo is acceptable.
+    """
+    cargo = ROOT / "sophon" / "Cargo.toml"
+    if not cargo.exists():
+        return False
+    try:
+        text = cargo.read_text(errors="ignore")
+        if "sophon-core" not in text and "mcp-integration" not in text:
+            return False
+    except OSError:
+        return False
+    try:
+        remote = subprocess.check_output(
+            ["git", "-C", str(ROOT), "remote", "get-url", "origin"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        return "mcp-sophon" in remote
+    except subprocess.CalledProcessError:
+        return False
+
+
+def anonymise_commit(c: dict, idx: int) -> dict:
+    """Return a copy of `c` with identifying fields scrubbed:
+
+      sha          → `commit_<idx>`
+      subject      → `<type>:` only (no message, no scope)
+      body         → `<empty>` (replace with a structural placeholder)
+      author       → `(redacted)`
+      files        → `[file.ext, file.ext, …]` (extension only,
+                     count preserved so structural metrics stay)
+      diff         → kept in the dict (sophon needs it to measure)
+                     but never printed because the bench output
+                     doesn't surface diff bodies.
+    """
+    safe_files = []
+    for f in c.get("files", []):
+        if not f.strip():
+            continue
+        ext = Path(f).suffix or "(no-ext)"
+        safe_files.append(f"file{ext}")
+    return {
+        "sha": f"commit_{idx:03d}",
+        "subject": f"{_conventional_prefix(c['subject'])}: <redacted>",
+        "body": "<redacted>",
+        "author": "(redacted)",
+        "date": c.get("date", ""),
+        "diff": c.get("diff", ""),  # kept for measurement, never printed
+        "files": safe_files,
+    }
+
+
 def git_commits(since: str, until: str) -> list[dict]:
     """Walk the commit range and return a list of structured records.
     Uses `\x1e` (record separator) between commits and `\x1f` (unit
@@ -302,11 +397,39 @@ def main() -> int:
     parser.add_argument("--max-tokens", type=int, default=4000)
     parser.add_argument("--max-diff-chars", type=int, default=4000)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--anonymise",
+        action="store_true",
+        help=(
+            "Scrub identifying details (commit SHA → commit_NNN, "
+            "subject → '<type>: <redacted>', author → '(redacted)', "
+            "file paths → 'file.<ext>') before anything lands in "
+            "stdout / JSON. Diffs are still passed to sophon for "
+            "measurement but never printed. Use when running against "
+            "a private repo."
+        ),
+    )
     args = parser.parse_args()
 
     if not Path(SOPHON).exists():
         print(f"sophon binary not found at {SOPHON!r}", file=sys.stderr)
         return 2
+
+    if not args.anonymise and not is_sophon_own_repo():
+        print(
+            "\n"
+            "================================================================\n"
+            " WARNING: --anonymise is OFF and this looks like a NON-Sophon repo.\n"
+            "\n"
+            " The bench will print real commit SHAs + subjects in --json output\n"
+            " (and in [B] bombs section if you also run real_session_deep_dive).\n"
+            " Diffs are passed to sophon for measurement (in-process; not logged).\n"
+            "\n"
+            " If this repo is private or sensitive, re-run with `--anonymise`:\n"
+            "   python3 benchmarks/real_session_capture.py --anonymise ...\n"
+            "================================================================\n",
+            file=sys.stderr,
+        )
 
     print(f"Walking git log {args.since}..{args.until}…", file=sys.stderr)
     commits = git_commits(args.since, args.until)
@@ -314,6 +437,20 @@ def main() -> int:
     if not commits:
         print("no commits in range — try a wider --since", file=sys.stderr)
         return 1
+
+    # NOTE: we do NOT mutate `commits` here. Compression
+    # measurements must run on the REAL content (otherwise we'd be
+    # compressing `"<redacted>"` strings and understating the win).
+    # Anonymisation happens only at output sites — the per_diff /
+    # bombs / JSON dicts that actually leave the bench.
+    if args.anonymise:
+        print(
+            "  → anonymisation ON: per_diff / JSON outputs will use "
+            "commit_NNN ids, '<type>: <redacted>' subjects, "
+            "extension-only file lists. Diff content is still fed "
+            "to sophon for measurement but never printed.",
+            file=sys.stderr,
+        )
 
     # Per-commit compress_output measurement on the diff body itself.
     per_diff = []
@@ -325,9 +462,15 @@ def main() -> int:
         if not diff.strip():
             continue
         result = rpc_compress_output("git diff", diff)
+        if args.anonymise:
+            sha_out = f"commit_{i + 1:03d}"
+            subject_out = f"{_conventional_prefix(c['subject'])}: <redacted>"
+        else:
+            sha_out = c["sha"]
+            subject_out = c["subject"][:60]
         per_diff.append({
-            "sha": c["sha"],
-            "subject": c["subject"][:60],
+            "sha": sha_out,
+            "subject": subject_out,
             "raw_tokens": int(result.get("original_tokens") or 0),
             "compressed_tokens": int(result.get("compressed_tokens") or 0),
             "ratio": float(result.get("ratio") or 1.0),
@@ -371,7 +514,7 @@ def main() -> int:
 
     last_ck = checkpoints[-1] if checkpoints else {}
     summary = {
-        "git_range": f"{args.since}..{args.until}",
+        "git_range": "(redacted)" if args.anonymise else f"{args.since}..{args.until}",
         "commits": len(commits),
         "session_total_messages": len(accumulated),
         "tail_raw_tokens": last_ck.get("raw_tokens", 0),

@@ -122,6 +122,30 @@ def commit_type(subject: str) -> str:
     return "(other)"
 
 
+def is_sophon_own_repo() -> bool:
+    """Same heuristic as real_session_capture.is_sophon_own_repo —
+    duplicated rather than imported because both scripts are
+    standalone CLIs we want users to pip-install / curl directly."""
+    cargo = ROOT / "sophon" / "Cargo.toml"
+    if not cargo.exists():
+        return False
+    try:
+        text = cargo.read_text(errors="ignore")
+        if "sophon-core" not in text and "mcp-integration" not in text:
+            return False
+    except OSError:
+        return False
+    try:
+        remote = subprocess.check_output(
+            ["git", "-C", str(ROOT), "remote", "get-url", "origin"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        return "mcp-sophon" in remote
+    except subprocess.CalledProcessError:
+        return False
+
+
 def rpc(name: str, arguments: dict, env: dict | None = None) -> dict:
     payload = [
         {"jsonrpc": "2.0", "id": 0, "method": "initialize",
@@ -169,12 +193,17 @@ def commit_to_messages(c: dict, max_diff_chars: int = 4000) -> list[dict]:
 # ============================================================================
 # A. Per-commit-type breakdown
 # ============================================================================
-def per_type(commits: list[dict]) -> dict:
+def per_type(commits: list[dict], anonymise: bool = False) -> dict:
+    """Per-commit-type aggregate. Bucket key is the conventional-
+    commit type (`feat`/`fix`/…) which is structural, not personal,
+    so it's safe to print regardless of `--anonymise`.
+    Per-bucket the only stored ID is the SHA — only used internally
+    here, never returned, so no anonymisation needed at this level."""
+    _ = anonymise  # bucket output has no identifying fields
     buckets: dict[str, list] = defaultdict(list)
     for c in commits:
         result = rpc("compress_output", {"command": "git diff", "output": c["diff"][:16000]})
         buckets[commit_type(c["subject"])].append({
-            "sha": c["sha"],
             "raw": int(result.get("original_tokens") or 0),
             "compressed": int(result.get("compressed_tokens") or 0),
         })
@@ -197,15 +226,28 @@ def per_type(commits: list[dict]) -> dict:
 # ============================================================================
 # B. Bombs — top 5 by raw tokens
 # ============================================================================
-def bombs(commits: list[dict], top_n: int = 5) -> dict:
+def bombs(commits: list[dict], top_n: int = 5, anonymise: bool = False) -> dict:
+    """Top-N largest commits by raw tokens. The output dict carries
+    `sha` + `subject`, both of which can leak identifying details
+    when this script is run against a private repo. With
+    `anonymise=True`, both fields are scrubbed: SHA → commit_NNN
+    placed by sort-position, subject → '<type>: <redacted>'.
+    The compression measurement is unaffected (we still feed the
+    real diff to sophon)."""
     enriched = []
-    for c in commits:
+    for i, c in enumerate(commits):
         result = rpc("compress_output", {"command": "git diff", "output": c["diff"][:32000]})
         raw = int(result.get("original_tokens") or 0)
         compressed = int(result.get("compressed_tokens") or 0)
+        if anonymise:
+            sha_out = f"commit_{i + 1:03d}"
+            subject_out = f"{commit_type(c['subject'])}: <redacted>"
+        else:
+            sha_out = c["sha"]
+            subject_out = c["subject"][:70]
         enriched.append({
-            "sha": c["sha"],
-            "subject": c["subject"][:70],
+            "sha": sha_out,
+            "subject": subject_out,
             "raw_tokens": raw,
             "compressed_tokens": compressed,
             "saved_pct": (raw - compressed) / raw * 100 if raw else 0.0,
@@ -299,11 +341,37 @@ def main() -> int:
         ),
     )
     parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--anonymise",
+        action="store_true",
+        help=(
+            "Scrub identifying fields (commit SHA → commit_NNN, "
+            "subject → '<type>: <redacted>') before any stdout / "
+            "JSON output. Diffs are still fed to sophon for "
+            "measurement but never printed. Use when running "
+            "against a private repo."
+        ),
+    )
     args = parser.parse_args()
 
     if not Path(SOPHON).exists():
         print(f"sophon binary not found at {SOPHON!r}", file=sys.stderr)
         return 2
+
+    if not args.anonymise and not is_sophon_own_repo():
+        print(
+            "\n"
+            "================================================================\n"
+            " WARNING: --anonymise is OFF and this looks like a NON-Sophon repo.\n"
+            "\n"
+            " Section [B] bombs will print real commit SHAs + subjects.\n"
+            " --json output will include the same per-commit identifiers.\n"
+            " Diffs are passed to sophon for measurement (in-process; not logged).\n"
+            "\n"
+            " If this repo is private or sensitive, re-run with `--anonymise`.\n"
+            "================================================================\n",
+            file=sys.stderr,
+        )
 
     print(f"Walking git log {args.since}..{args.until}…", file=sys.stderr)
     commits = git_commits(args.since, args.until)
@@ -312,10 +380,10 @@ def main() -> int:
         return 1
 
     print("[A] Per-commit-type breakdown…", file=sys.stderr)
-    a = per_type(commits)
+    a = per_type(commits, anonymise=args.anonymise)
 
     print("[B] Bombs (top largest by raw tokens)…", file=sys.stderr)
-    b = bombs(commits, args.top_n)
+    b = bombs(commits, args.top_n, anonymise=args.anonymise)
 
     print("[D] Rolling-summary on/off compare…", file=sys.stderr)
     d = rolling_compare(commits)
@@ -330,7 +398,7 @@ def main() -> int:
     c = usd_savings(tail_raw, tail_compressed, tail_total_raw, tail_total_compressed, args.model)
 
     summary = {
-        "git_range": f"{args.since}..{args.until}",
+        "git_range": "(redacted)" if args.anonymise else f"{args.since}..{args.until}",
         "commits": len(commits),
         **a,
         **b,
