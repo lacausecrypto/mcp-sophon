@@ -28,7 +28,11 @@ jobs:
         run: |
           # Download the prebuilt binary from the registry's GitHub releases.
           # Pinned to a known-good tag; bump when a new publisher releases.
-          PUB_VERSION="v1.6.0"
+          # v1.7.0 (2026-04-25) ships the OIDC audience fix —
+          # `https://registry.modelcontextprotocol.io` instead of the
+          # legacy `mcp-registry` value that v1.6.0 was sending and the
+          # registry now rejects with HTTP 401 "invalid audience".
+          PUB_VERSION="v1.7.6"
           curl -fsSL \
             "https://github.com/modelcontextprotocol/registry/releases/download/${PUB_VERSION}/mcp-publisher_linux_amd64.tar.gz" \
             | tar xz -C /usr/local/bin mcp-publisher
