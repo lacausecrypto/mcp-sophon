@@ -33,6 +33,22 @@ LOCOMO recall is mem0's territory) holds; v0.5.1 + v0.5.2 are
 phase-1 and phase-2 perf passes. Earlier release TL;DRs are
 archived in [CHANGELOG.md](./CHANGELOG.md).
 
+### Real session capture (v0.5.4 — measured on this repo's own dev history)
+
+The headline number is no longer synthetic. We replayed **29 real
+commits** of v0.5.0 → v0.5.4 development on this repo (10 days of
+agent-driven software engineering: feat / fix / test / refactor /
+release chore) through `compress_history`. Each commit becomes a
+real "user request → assistant explanation → diff applied" turn.
+
+| Metric | Value | Source |
+|---|---|---|
+| **Tail compression** (29 commits / 116 messages) | **93.0 %** (50 743 → 3 576 tokens) | [`real_session_capture.py`](./benchmarks/real_session_capture.py) |
+| **Per-diff `compress_output`** (weighted aggregate of all 29 diffs) | **88.1 %** (81 340 → 9 657 tokens) | idem |
+| **Compression scaling** | 68 % at 5 commits → **93 % at 29 commits** | session length amplifies the win |
+
+The bench script + the JSON archive are reproducible: anyone with the repo and `cargo build --release` can verify these numbers byte-for-byte. The "honest scope" caveat is documented in the bench file (commit subjects = directives, commit bodies = verbose by this repo's style — matches typical Claude Code output, may not match a terser agent).
+
 ### Orthogonal-stack economics
 
 | Stack | Additional saved by Sophon | Benchmark |
