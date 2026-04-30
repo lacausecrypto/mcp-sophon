@@ -24,37 +24,58 @@ history + deprecated numbers live in [CHANGELOG.md](./CHANGELOG.md).
 
 ---
 
-## TL;DR — v0.5.0
+## TL;DR — v0.5.2
 
 Sophon is a **deterministic context compressor** that slots in front
 of whatever memory / cache / code-nav layer you already use — not
-instead of them. v0.5.0 is a positioning re-scope: we stopped chasing
-LOCOMO conversational recall (mem0's territory) and doubled down on
-pure compression. Full rationale in
-[CHANGELOG § 0.5.0](./CHANGELOG.md#050--unreleased).
+instead of them. The v0.5.0 positioning re-scope (pure compression,
+LOCOMO recall is mem0's territory) holds; v0.5.1 + v0.5.2 are
+phase-1 and phase-2 perf passes. Earlier release TL;DRs are
+archived in [CHANGELOG.md](./CHANGELOG.md).
 
-### New in v0.5.0 — orthogonal-stack economics
+### Orthogonal-stack economics
 
 | Stack | Additional saved by Sophon | Benchmark |
 |---|---|---|
 | **Sophon + Anthropic prompt caching** | **+24 % tokens / +49 % $** on a 25-turn Claude-3.5-Sonnet session | [`sophon_plus_prompt_caching.py`](./benchmarks/sophon_plus_prompt_caching.py) |
 | **Sophon + mem0** | Depends on mem0 output size; the bench flags overhead on short dumps directly | [`sophon_plus_mem0.py`](./benchmarks/sophon_plus_mem0.py) |
 
-### New in v0.5.0 — single-binary efficiency
+### Single-binary efficiency (v0.5.2 release binary, macOS arm64)
 
-Four lines every Python-based context layer would struggle to match. All measured against the v0.5.0 release binary on macOS arm64.
-
-| Metric | Value | Benchmark |
-|---|---|---|
-| **Binary on disk** | **8.7 MB** (release) | `stat` on the release target |
-| **Cold start → ready** | **10.6 ms** p50, **25 ms** p99 | [`cold_start_and_footprint.py`](./benchmarks/cold_start_and_footprint.py) |
-| **RSS after initialize** | **12.5 MB** | idem |
-| **Session scaling** (1 → 200 turns) | `update_memory` **0.1 ms** p50, flat; `compress_history` **4.2 ms** p50 / **50 ms** p99 | [`session_scaling_curve.py`](./benchmarks/session_scaling_curve.py) |
-| **`compress_output` coverage** | **81.6 %** weighted aggregate across 15 command families (git, cargo, docker, pytest, npm, kubectl, curl, tail, grep, …) | [`compress_output_per_command.py`](./benchmarks/compress_output_per_command.py) |
+| Metric | Value | vs v0.5.0 | Benchmark |
+|---|---|---|---|
+| **Binary on disk** | **5.2 MB** (release) | -39 % (was 8.7 MB) | `stat` |
+| **Cold start → ready** | **34 ms** p50, **37 ms** p99 | unchanged | [`cold_start_and_footprint.py`](./benchmarks/cold_start_and_footprint.py) |
+| **RSS after initialize** | **41 MB** (tokenizer pre-warmed) | tokens loaded at boot | idem |
+| **Session scaling** (1 → 200 turns) | `update_memory` **0.1 ms** p50 / **0.4 ms** p99; `compress_history` **4 ms** p50 / **47 ms** p99 | -75× on update_memory p99 | [`session_scaling_curve.py`](./benchmarks/session_scaling_curve.py) |
+| **`compress_output` coverage** | **83.1 %** weighted aggregate across 15 command families | +1.5 pt (curl_verbose + git_diff dedup) | [`compress_output_per_command.py`](./benchmarks/compress_output_per_command.py) |
 
 Pass `--include-python-baseline` to `cold_start_and_footprint.py` to contrast against `python -c "import mem0"` / `sentence_transformers` / `langchain` on your machine.
 
-### Carried over (still on-thesis, measured at v0.4.0 and unchanged)
+### New in v0.5.2 — rolling summary at ingest time
+
+`SOPHON_ROLLING_SUMMARY=1` makes `update_memory` build the
+conversation summary incrementally; `compress_history` then serves
+the cached state instead of re-summarising from scratch. With
+`SOPHON_LLM_CMD` configured this moves the 5-8 s LLM spike off the
+query path entirely. Sidecar persists at
+`<memory_path>.sophon-summary.json` so a restart resumes without
+re-summarising. See
+[`benchmarks/rolling_summary_effect.py`](./benchmarks/rolling_summary_effect.py)
+for the measurement harness; honest reporting includes the LLM-off
+case where the heuristic was already fast enough that no
+measurable speedup appears.
+
+### Phase-1 carry-overs (still active in v0.5.2)
+
+- **`tracing::instrument` on the 5 hot-path entries** — observable
+  via `RUST_LOG=sophon=debug`.
+- **Eager tokenizer warm-up** — first-call spike eliminated.
+- **Embedding reuse on JSONL reopen** — no re-embed pass at retriever cold start.
+- **`curl_verbose` filter** — `curl -v` 0.5 % → 60.3 % saved.
+- **`git_diff` dedup strategy** — 11.8 % → 51.8 % on mechanical diffs.
+
+### Carried over from v0.4.0 (still on-thesis, unchanged)
 
 | Use case | Metric | Compared to |
 |---|---|---|
@@ -63,19 +84,14 @@ Pass `--include-python-baseline` to `cold_start_and_footprint.py` to contrast ag
 | **Code retrieval (repo QA)** | **recall@3 = 70 %** on "where is X?" questions ([§ 4](./BENCHMARK.md#-4--repo-qa)) | grep: 10 % ; FULL context: 20 % |
 | **Latency + reliability** | **p99 < 87 ms** on 5/7 ops, **100 % ok_rate** on 190 runs ([§ 3](./BENCHMARK.md#-3--latency--reliability)) | Sub-second guaranteed |
 
-### Protocol + DX changes in v0.5.0
+### Protocol + DX (since v0.5.0)
 
-- **MCP protocol `2025-06-18`** — adds `notifications/cancelled`,
-  structured JSON-RPC error codes (`-32000..-32099` reserved range
-  for Sophon server errors), and an infallible dispatcher so a
-  single malformed request can no longer kill the stdio loop.
-- **`sophon doctor`** — read-only installation diagnostic: binary
-  + resolved config + every `SOPHON_*` flag in use + path
-  writability + LLM-command PATH probe + MCP-client config
-  hints. Also surfaces deprecated recall-chasing flags.
-- **Observability** — 18 `eprintln!` replaced with `tracing`;
-  filter via `RUST_LOG=sophon=debug`.
-- **Tests** — workspace count 303 (v0.4.0) → 405+.
+- **MCP protocol `2025-06-18`** — `notifications/cancelled`,
+  structured JSON-RPC error codes, infallible dispatcher.
+- **`sophon doctor`** — read-only installation diagnostic with
+  every `SOPHON_*` flag, path writability, MCP-client hints,
+  rolling-summary state.
+- **Tests** — workspace count 303 (v0.4.0) → 392 (v0.5.2).
 
 ### What stopped being a goal
 

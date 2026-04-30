@@ -9,6 +9,121 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 with additional **Measured** / **Honest findings** sections for bench
 results and failed experiments.
 
+## [0.5.2] — 2026-04-30
+
+Phase-2 of the post-v0.5.0 perf push. Two structural wins —
+release-binary size cut and ingest-time rolling summary —
+landed; tool-call dedup and streaming `compress_output` were
+intentionally deferred to v0.5.3 because they need real Claude-
+Code-session data to bench honestly, and we'd rather defer than
+ship un-measured optimisations.
+
+### Perf — release binary size
+
+Stock cargo release profile (`opt-level=3`, `lto=false`,
+`codegen-units=16`, no strip, `panic="unwind"`) replaced with an
+empirically-tuned set:
+
+```toml
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
+```
+
+Result on macOS arm64:
+* **Binary size: 8.6 MB → 5.2 MB (-39 %)**
+* Cold start p50: **34 ms** — unchanged vs v0.5.1
+* `compress_output` aggregate: **83.1 %** — unchanged
+* Workspace tests: 392/392 green under `cargo test --release`
+
+`opt-level = "z"` and `"s"` were both tried first and rejected:
+each regressed the tiktoken-rs BPE merge loop measurably (cold
+start went to 81 ms and 43 ms respectively). LTO + strip +
+panic-abort do enough size work on their own without touching
+the inner loops.
+
+`panic = "abort"` is safe in this workspace — verified via grep:
+no `catch_unwind` calls, MCP dispatcher already treats panics
+as unrecoverable. Aborting on panic saves ~700 KB of unwind
+tables and avoids the half-unwound-stack hazard mid-request.
+
+### Feat — `SOPHON_ROLLING_SUMMARY` rolling summary at ingest
+
+When `SOPHON_ROLLING_SUMMARY=1`, `MemoryManager::append`
+incrementally maintains a `RollingSummary` covering the older
+slice of conversation. `compress_history` then serves the
+cached state instead of re-summarising the full history per
+query. With `SOPHON_LLM_CMD` configured this moves the 5-8 s
+LLM spike off the query path entirely (one Haiku call per ~50
+new messages instead of per query).
+
+New env vars:
+* `SOPHON_ROLLING_SUMMARY=1` — feature toggle (default off, so
+  callers without the env var see byte-identical behaviour to
+  v0.5.1).
+* `SOPHON_ROLLING_THRESHOLD=N` — refresh cadence (default 50;
+  sanity floor 10).
+
+Persistence: a JSON sidecar at `<memory_path>.sophon-summary.json`
+keeps the rolling state across `sophon serve` restarts. Sidecars
+ahead of the live history (e.g. JSONL truncated externally) are
+discarded on reopen.
+
+LLM activation matches the existing `compress_history` policy:
+implicit when `SOPHON_LLM_CMD` is set, explicit via
+`config.use_llm_summarization`, opt-out via
+`SOPHON_NO_LLM_SUMMARY=1`. On LLM failure, ingest falls back to
+the heuristic summariser so a transient subprocess error never
+blocks `update_memory`.
+
+`sophon doctor` now surfaces both flags under a new
+`FlagScope::Memory` group.
+
+### Bench — `rolling_summary_effect.py`
+
+New benchmark harness measures the v0.5.2 feature's impact
+honestly:
+
+```
+run                                  compress p50  compress p99   update p99
+baseline (no rolling)                       4.13ms       50.61ms      0.16ms
+rolling enabled (heuristic)                 4.19ms       48.35ms      0.22ms
+```
+
+The heuristic-mode delta is essentially zero — the heuristic
+summariser was already fast (sub-ms on 200 messages), so caching
+its output doesn't move the needle. **The pitch lives in the
+LLM-mode case** (5-8 s spike → ~5 ms cached read), measurable by
+passing `--with-llm` if `claude -p --model haiku` is on `$PATH`.
+
+### Tests + counts
+
+* `summarizer::rolling_tests` — 5 new unit tests (threshold
+  gating, recent-floor, idempotence, stale state, no-rolling
+  parity).
+* `tests/integration_test.rs` — 5 new integration tests
+  (default-off contract, threshold firing, snapshot path,
+  sidecar persistence + reload, reset cleanup). Env-touching
+  tests serialised via a `Mutex` guard to avoid races under
+  cargo's parallel runner.
+* Workspace test count: **387 → 392**.
+
+### Deferred to v0.5.3
+
+* **Tool-call dedup at chunker level** (phase 2C) — needs real
+  Claude Code session traces to design the dedup key correctly
+  and to bench against. Synthetic data would let us guess at
+  the win without measuring it.
+* **Streaming `compress_output`** (phase 2D) — MCP 2025-06-18
+  doesn't support streamed responses naturally; would need a
+  CLI-level `sophon exec --stream` mode plus a measured
+  workload (`tail -f` / `cargo build --watch`) to defend the
+  feature. Both pieces deferred until phase-3 async work
+  lands.
+
 ## [0.5.1] — 2026-04-20
 
 Phase-1 follow-up to v0.5.0. Three targeted perf wins + two
