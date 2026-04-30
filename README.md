@@ -24,30 +24,55 @@ history + deprecated numbers live in [CHANGELOG.md](./CHANGELOG.md).
 
 ---
 
-## TL;DR — v0.5.2
+## TL;DR — v0.5.4
 
 Sophon is a **deterministic context compressor** that slots in front
 of whatever memory / cache / code-nav layer you already use — not
-instead of them. The v0.5.0 positioning re-scope (pure compression,
-LOCOMO recall is mem0's territory) holds; v0.5.1 + v0.5.2 are
-phase-1 and phase-2 perf passes. Earlier release TL;DRs are
-archived in [CHANGELOG.md](./CHANGELOG.md).
+instead of them. v0.5.0 was the positioning re-scope (pure
+compression, LOCOMO recall is mem0's territory). v0.5.1 → v0.5.4
+are perf + observability passes ending with measured async
+dispatch + working `notifications/cancelled`.
 
-### Real session capture (v0.5.4 — measured on this repo's own dev history)
+### 🆕 Real session — measured on this repo's own dev history
 
-The headline number is no longer synthetic. We replayed **29 real
-commits** of v0.5.0 → v0.5.4 development on this repo (10 days of
-agent-driven software engineering: feat / fix / test / refactor /
-release chore) through `compress_history`. Each commit becomes a
-real "user request → assistant explanation → diff applied" turn.
+We replayed **30 real commits** of v0.5.0 → v0.5.4 development
+(10 days of agent-driven software engineering on this repo —
+feat / fix / test / refactor / release / bench) through
+`compress_history` and `compress_output`. The bench script is in
+[`real_session_capture.py`](./benchmarks/real_session_capture.py)
+and the deeper texture in
+[`real_session_deep_dive.py`](./benchmarks/real_session_deep_dive.py).
+Reproducible byte-for-byte by anyone with `cargo build --release`.
 
-| Metric | Value | Source |
-|---|---|---|
-| **Tail compression** (29 commits / 116 messages) | **93.0 %** (50 743 → 3 576 tokens) | [`real_session_capture.py`](./benchmarks/real_session_capture.py) |
-| **Per-diff `compress_output`** (weighted aggregate of all 29 diffs) | **88.1 %** (81 340 → 9 657 tokens) | idem |
-| **Compression scaling** | 68 % at 5 commits → **93 % at 29 commits** | session length amplifies the win |
+#### Headline
 
-The bench script + the JSON archive are reproducible: anyone with the repo and `cargo build --release` can verify these numbers byte-for-byte. The "honest scope" caveat is documented in the bench file (commit subjects = directives, commit bodies = verbose by this repo's style — matches typical Claude Code output, may not match a terser agent).
+| Metric | Value |
+|---|---|
+| **Tail `compress_history`** (30 commits / 116 messages) | **93.0 %** (50 743 → 3 576 tokens) |
+| **Per-diff `compress_output`** (weighted aggregate) | **88.1 %** (85 579 → 9 886 tokens) |
+| **Compression growth with session length** | 68 % at 5 commits → **93 % at 30 commits** |
+| **Naive USD saved** (Claude 3.5 Sonnet input pricing) | $0.37 / session |
+| **With prompt caching** (25-turn reads at $0.30/MT) | $0.59 / session |
+
+#### Per-commit-type breakdown — where the win comes from
+
+```
+type        n     raw  saved%
+bench       4   15740   95.1 %    <- biggest win, dense content
+feat        7   26634   94.7 %
+test        1    4287   94.3 %
+chore       6   19589   90.5 %
+ci          2    4474   90.5 %
+docs        3    7371   88.0 %
+perf        2    3609   82.8 %
+fix         1     544   10.7 %    <- tiny commits, less to compress
+style       4    3331    4.3 %    <- rustfmt-only diffs already-compact
+```
+
+Sophon is honest about where it doesn't help: a `style:` PR that's
+nothing but rustfmt drift gives ~no compression because the diff
+is already minimal. The win is on substantive content — exactly
+where an agent loop spends most of its tokens.
 
 ### Orthogonal-stack economics
 
@@ -56,7 +81,7 @@ The bench script + the JSON archive are reproducible: anyone with the repo and `
 | **Sophon + Anthropic prompt caching** | **+24 % tokens / +49 % $** on a 25-turn Claude-3.5-Sonnet session | [`sophon_plus_prompt_caching.py`](./benchmarks/sophon_plus_prompt_caching.py) |
 | **Sophon + mem0** | Depends on mem0 output size; the bench flags overhead on short dumps directly | [`sophon_plus_mem0.py`](./benchmarks/sophon_plus_mem0.py) |
 
-### Single-binary efficiency (v0.5.2 release binary, macOS arm64)
+### Single-binary efficiency (v0.5.4 release binary, macOS arm64)
 
 | Metric | Value | vs v0.5.0 | Benchmark |
 |---|---|---|---|
@@ -64,7 +89,8 @@ The bench script + the JSON archive are reproducible: anyone with the repo and `
 | **Cold start → ready** | **34 ms** p50, **37 ms** p99 | unchanged | [`cold_start_and_footprint.py`](./benchmarks/cold_start_and_footprint.py) |
 | **RSS after initialize** | **41 MB** (tokenizer pre-warmed) | tokens loaded at boot | idem |
 | **Session scaling** (1 → 200 turns) | `update_memory` **0.1 ms** p50 / **0.4 ms** p99; `compress_history` **4 ms** p50 / **47 ms** p99 | -75× on update_memory p99 | [`session_scaling_curve.py`](./benchmarks/session_scaling_curve.py) |
-| **`compress_output` coverage** | **83.1 %** weighted aggregate across 15 command families | +1.5 pt (curl_verbose + git_diff dedup) | [`compress_output_per_command.py`](./benchmarks/compress_output_per_command.py) |
+| **`compress_output` synthetic coverage** | **90.1 %** weighted aggregate across 18 command families incl. JSON | +7 pt vs v0.5.2 (JsonStructural strategy) | [`compress_output_per_command.py`](./benchmarks/compress_output_per_command.py) |
+| **Async tool dispatch** | `notifications/cancelled` actually drops the response | new in v0.5.4 | [`tests/cancellation_e2e.rs`](./sophon/crates/mcp-integration/tests/cancellation_e2e.rs) |
 
 Pass `--include-python-baseline` to `cold_start_and_footprint.py` to contrast against `python -c "import mem0"` / `sentence_transformers` / `langchain` on your machine.
 
@@ -82,14 +108,26 @@ for the measurement harness; honest reporting includes the LLM-off
 case where the heuristic was already fast enough that no
 measurable speedup appears.
 
-### Phase-1 carry-overs (still active in v0.5.2)
+### Phase-1 → phase-2 → tier-1 → v0.5.4 cumulative wins
 
-- **`tracing::instrument` on the 5 hot-path entries** — observable
-  via `RUST_LOG=sophon=debug`.
-- **Eager tokenizer warm-up** — first-call spike eliminated.
-- **Embedding reuse on JSONL reopen** — no re-embed pass at retriever cold start.
-- **`curl_verbose` filter** — `curl -v` 0.5 % → 60.3 % saved.
-- **`git_diff` dedup strategy** — 11.8 % → 51.8 % on mechanical diffs.
+- **v0.5.1** — `tracing::instrument` on 5 hot-path entries; eager
+  tokenizer warm-up; embedding reuse on JSONL reopen;
+  `curl_verbose` filter (0.5 % → 60.3 %); `git_diff` dedup
+  (11.8 % → 51.8 %).
+- **v0.5.2** — release binary 8.6 MB → 5.2 MB (-39 %); rolling
+  summary at ingest time (`SOPHON_ROLLING_SUMMARY=1` moves the
+  5-8 s LLM spike off the query path).
+- **v0.5.3** — `JsonStructural` strategy in `compress_output`
+  (compress_output aggregate 83.1 % → 90.1 %); tool-call dedup
+  foundation in the chunker (`ChunkType::ToolUse`/`ToolResult`,
+  arg-order-normalised hash key); CI bench nightly + on-PR
+  regression alarm.
+- **v0.5.4** — async tool dispatch with `tokio::spawn_blocking`
+  + `JoinSet` drain; `notifications/cancelled` actually drops
+  the response via per-request `CancellationToken`; tool-call
+  dedup measured at **74 % chunk reduction** on a 50-turn
+  Claude-Code-shaped synthetic; first **real-session capture
+  bench** (this README's headline 93 %).
 
 ### Carried over from v0.4.0 (still on-thesis, unchanged)
 
@@ -102,12 +140,16 @@ measurable speedup appears.
 
 ### Protocol + DX (since v0.5.0)
 
-- **MCP protocol `2025-06-18`** — `notifications/cancelled`,
-  structured JSON-RPC error codes, infallible dispatcher.
+- **MCP protocol `2025-06-18`** — `notifications/cancelled`
+  actually interrupts the response since v0.5.4 (in-flight CPU
+  work continues until v0.5.5 cooperative-interrupt landing);
+  structured JSON-RPC error codes; infallible dispatcher.
 - **`sophon doctor`** — read-only installation diagnostic with
   every `SOPHON_*` flag, path writability, MCP-client hints,
-  rolling-summary state.
-- **Tests** — workspace count 303 (v0.4.0) → 392 (v0.5.2).
+  rolling-summary state, deprecated-flag warnings.
+- **Tests** — workspace count 303 (v0.4.0) → **405 (v0.5.4)**.
+- **CI** — 4 platform matrix + nightly bench-vs-baseline +
+  per-PR regression alarm on `sophon/crates/**`.
 
 ### What stopped being a goal
 
