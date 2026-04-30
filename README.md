@@ -35,46 +35,40 @@ dispatch + working `notifications/cancelled`.
 
 ### 🆕 Real session — measured on this repo's own dev history
 
-We replayed **30 real commits** of v0.5.0 → v0.5.4 development
-(10 days of agent-driven software engineering on this repo —
-feat / fix / test / refactor / release / bench) through
-`compress_history` and `compress_output`. The bench script is in
-[`real_session_capture.py`](./benchmarks/real_session_capture.py)
-and the deeper texture in
-[`real_session_deep_dive.py`](./benchmarks/real_session_deep_dive.py).
+We don't pitch from synthetic benches alone. The headline number
+below is blended from **four independent real-data benches** that
+each measure a different chunk of an agent's tool traffic.
 Reproducible byte-for-byte by anyone with `cargo build --release`.
 
-#### Headline
+#### Headline (blended across 4 dimensions of real tool traffic)
 
-| Metric | Value |
+| Dimension | What it measures | Bench | Saved |
+|---|---|---|---|
+| **history** | `compress_history` over 38 real commits / 150+ messages | [`real_session_capture.py`](./benchmarks/real_session_capture.py) | **94.6 %** |
+| **shell** | `compress_output` on real `cargo`/`gh`/`git`/`ls`/`find` stdout | [`real_session_shell.py`](./benchmarks/real_session_shell.py) | **84.4 %** |
+| **filereads** | `compress_prompt` on real source files (Rust / Python / MD / TOML) | [`real_session_filereads.py`](./benchmarks/real_session_filereads.py) | **71.7 %** |
+| **search** | `compress_output` on real `grep`/`find`/`ls`/`wc` patterns | [`real_session_search.py`](./benchmarks/real_session_search.py) | **79.5 %** |
+| **🎯 Weighted blend** (default mix: 35/30/20/15) | typical agent session estimate | [`real_session_holistic.py`](./benchmarks/real_session_holistic.py) | **84.7 %** |
+
+`real_session_holistic.py` runs all four sub-benches sequentially with `--json` and produces the side-by-side table. Default weights reflect this repo's observed shape; pass `--weights "history=0.4,shell=0.35,filereads=0.15,search=0.10"` to model your own workload.
+
+#### Honest disclosure of where each dimension falls short
+
+- **history** measures only what `git` captures (commit messages + diffs) — about 5-10 % of a real session's *tool traffic* even though it's the biggest single chunk by token count. The 94.6 % is the *upper bound*.
+- **shell** mixes commands that compress well (`git diff` 95 %) with commands that don't (`gh repo view --json` *adds* tokens). 84.4 % is the *real-world average*, not a curated highlight.
+- **filereads** finds that `compress_prompt` on raw source files compresses by budget cap, not query routing — same input + different query = identical output. Honest finding documented in the bench.
+- **search** depends entirely on YOUR repo's state. A repo with no TODOs gets 0 % on `grep TODO`.
+
+The 84.7 % blended estimate is napkin-math from a linear weighted average. It's *not* a cherry-picked synthetic. It's what Sophon's compression machinery actually does to the kind of activity this repo's own dev cycle produces.
+
+#### USD economy on Opus 4.7 (this repo's session)
+
+| | Value |
 |---|---|
-| **Tail `compress_history`** (30+ commits / 120+ messages) | **93.0 %** (50 743 → 3 576 tokens) |
-| **Per-diff `compress_output`** (weighted aggregate) | **88.1 %** (85 579 → 9 886 tokens) |
-| **Compression growth with session length** | 68 % at 5 commits → **93 % at 30 commits** |
 | **Naive USD saved** (Claude **Opus 4.7** input pricing, $15/MT) | **$2.03 / session** |
 | **With prompt caching** (25-turn reads at $1.50/MT) | **$3.24 / session** |
 
 > Opus pricing is ~5× Sonnet. Pass `--model sonnet` or `--model haiku` to `real_session_deep_dive.py` if you're re-pricing for a cheaper tier.
-
-#### Per-commit-type breakdown — where the win comes from
-
-```
-type        n     raw  saved%
-bench       4   15740   95.1 %    <- biggest win, dense content
-feat        7   26634   94.7 %
-test        1    4287   94.3 %
-chore       6   19589   90.5 %
-ci          2    4474   90.5 %
-docs        3    7371   88.0 %
-perf        2    3609   82.8 %
-fix         1     544   10.7 %    <- tiny commits, less to compress
-style       4    3331    4.3 %    <- rustfmt-only diffs already-compact
-```
-
-Sophon is honest about where it doesn't help: a `style:` PR that's
-nothing but rustfmt drift gives ~no compression because the diff
-is already minimal. The win is on substantive content — exactly
-where an agent loop spends most of its tokens.
 
 ### Orthogonal-stack economics
 
