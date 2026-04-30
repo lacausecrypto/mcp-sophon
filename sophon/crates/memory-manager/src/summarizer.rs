@@ -25,6 +25,36 @@ impl Default for MemoryConfig {
     }
 }
 
+/// Pre-computed summary of the older slice of a conversation,
+/// produced once at ingest and reused at query time.
+///
+/// Without rolling state, every `compress_history` call re-runs the
+/// summariser over the full history; with LLM summarisation that is
+/// the 5-8 s spike measured at v0.4.0. With rolling state the LLM
+/// pays the cost once when crossing the refresh threshold, then
+/// `compress_history_with_rolling` only stitches `summary` to the
+/// live recent window — sub-millisecond on the hot path.
+///
+/// `summarized_until` is exclusive: `summary` covers
+/// `history[..summarized_until]`, and `history[summarized_until..]`
+/// is the un-summarised tail that becomes the recent window.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RollingSummary {
+    pub summary: String,
+    pub summarized_until: usize,
+    pub refreshed_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Default refresh threshold — refresh the rolling summary once
+/// the un-summarised tail reaches this many messages.
+///
+/// Picked empirically: with `recent_window = 5` (default), the
+/// recent_floor below evaluates to `max(2 × 5, 8) = 10`. Refreshing
+/// every 50 means each refresh covers roughly 40 new messages, which
+/// is large enough that the LLM call (5-8 s) stays amortised over
+/// many queries.
+pub const DEFAULT_ROLLING_REFRESH_THRESHOLD: usize = 50;
+
 /// Compress conversation history into memory.
 ///
 /// Short histories are passed through unchanged: if the total raw tokens of
@@ -384,5 +414,267 @@ fn enforce_budget(memory: &mut CompressedMemory, max_tokens: usize) {
 
         memory.token_count = token_count;
         break;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rolling summary — phase 2B
+// ---------------------------------------------------------------------------
+
+/// Decide whether the rolling summary needs a refresh; if so, build
+/// a new one. Returns `None` when the un-summarised tail is below
+/// `refresh_threshold`, or when leaving enough recent messages
+/// outside the summary would consume the whole tail (i.e. the
+/// session is too short for rolling to apply yet).
+///
+/// LLM activation matches `compress_history`'s policy:
+///   - implicit if `SOPHON_LLM_CMD` is set,
+///   - explicit via `config.use_llm_summarization`,
+///   - opt-out via `SOPHON_NO_LLM_SUMMARY=1`.
+///
+/// On LLM-call failure the function falls back to
+/// `heuristic_summarize` so a transient subprocess error never
+/// blocks ingest.
+#[tracing::instrument(
+    skip_all,
+    fields(
+        messages = history.len(),
+        existing_until = existing.map(|r| r.summarized_until).unwrap_or(0),
+        refresh_threshold = refresh_threshold,
+    ),
+)]
+pub fn refresh_rolling_summary(
+    history: &[Message],
+    existing: Option<&RollingSummary>,
+    config: &MemoryConfig,
+    refresh_threshold: usize,
+) -> Option<RollingSummary> {
+    let last_until = existing.map(|r| r.summarized_until).unwrap_or(0);
+    let unsummarized = history.len().saturating_sub(last_until);
+    if unsummarized < refresh_threshold {
+        return None;
+    }
+    // Always leave at least 2 × recent_window messages outside the
+    // summary so callers always have some recent live context. Floor
+    // at 8 to avoid pathological cases when recent_window is small.
+    let recent_floor = config.recent_window.saturating_mul(2).max(8);
+    let cap_until = history.len().saturating_sub(recent_floor);
+    if cap_until <= last_until {
+        return None;
+    }
+    let to_summarize = &history[..cap_until];
+
+    let opt_out = std::env::var("SOPHON_NO_LLM_SUMMARY")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let use_llm =
+        !opt_out && (config.use_llm_summarization || std::env::var("SOPHON_LLM_CMD").is_ok());
+    let summary = if use_llm {
+        llm_summarize(to_summarize).unwrap_or_else(|| heuristic_summarize(to_summarize))
+    } else {
+        heuristic_summarize(to_summarize)
+    };
+
+    Some(RollingSummary {
+        summary,
+        summarized_until: cap_until,
+        refreshed_at: chrono::Utc::now(),
+    })
+}
+
+/// Compress conversation history using a pre-computed rolling
+/// summary for the older slice. The recent window is read live so
+/// newly-appended messages are visible without waiting for the next
+/// refresh.
+///
+/// Falls back to `compress_history` when:
+///   - `rolling` is `None` (feature inactive),
+///   - the rolling state is ahead of the current history (e.g.
+///     after a `MemoryManager::reset` the summary is stale and must
+///     be recomputed from scratch).
+///
+/// This makes the rolling-summary feature strictly additive: a
+/// caller that doesn't opt in sees byte-identical output to the
+/// pre-2B path.
+#[tracing::instrument(
+    skip_all,
+    fields(
+        messages = messages.len(),
+        has_rolling = rolling.is_some(),
+        summarized_until = rolling.map(|r| r.summarized_until).unwrap_or(0),
+    ),
+)]
+pub fn compress_history_with_rolling(
+    messages: &[Message],
+    rolling: Option<&RollingSummary>,
+    config: &MemoryConfig,
+) -> CompressedMemory {
+    let Some(rolling) = rolling else {
+        return compress_history(messages, config);
+    };
+    if rolling.summarized_until > messages.len() {
+        return compress_history(messages, config);
+    }
+    if rolling.summarized_until == 0 {
+        return compress_history(messages, config);
+    }
+
+    let recent = &messages[rolling.summarized_until..];
+    let stable_facts = extract_facts(messages);
+    let mut compressed = CompressedMemory {
+        summary: rolling.summary.clone(),
+        stable_facts,
+        recent_messages: recent.to_vec(),
+        index: build_index(messages),
+        token_count: 0,
+        original_message_count: messages.len(),
+    };
+    enforce_budget(&mut compressed, config.max_tokens);
+
+    // Same safety net as `compress_history`: if the budget enforcer
+    // can't shrink below the raw token cost, fall back to passthrough.
+    let raw_tokens: usize = messages.iter().map(|m| m.token_count).sum();
+    if compressed.token_count > raw_tokens && messages.len() < config.compression_threshold {
+        return CompressedMemory {
+            summary: String::new(),
+            stable_facts: vec![],
+            recent_messages: messages.to_vec(),
+            index: SemanticIndex::default(),
+            token_count: raw_tokens,
+            original_message_count: messages.len(),
+        };
+    }
+    compressed
+}
+
+#[cfg(test)]
+mod rolling_tests {
+    use super::*;
+    use crate::message::{Message, Role};
+
+    fn user(s: &str) -> Message {
+        Message::new(Role::User, s.to_string())
+    }
+    fn asst(s: &str) -> Message {
+        Message::new(Role::Assistant, s.to_string())
+    }
+
+    /// Build N synthetic message pairs so the history grows
+    /// deterministically — used to exercise threshold logic.
+    fn synth_history(pairs: usize) -> Vec<Message> {
+        let mut out = Vec::with_capacity(pairs * 2);
+        for i in 0..pairs {
+            out.push(user(&format!("Question {i}: how does X work?")));
+            out.push(asst(&format!(
+                "Answer {i}: X works by combining Y and Z under conditions A_{i}."
+            )));
+        }
+        out
+    }
+
+    #[test]
+    fn refresh_returns_none_below_threshold() {
+        let history = synth_history(20); // 40 messages
+        // SOPHON_NO_LLM_SUMMARY guarantees deterministic heuristic path
+        std::env::set_var("SOPHON_NO_LLM_SUMMARY", "1");
+        let cfg = MemoryConfig::default();
+        let result = refresh_rolling_summary(&history, None, &cfg, 50);
+        std::env::remove_var("SOPHON_NO_LLM_SUMMARY");
+        assert!(
+            result.is_none(),
+            "below threshold (40 < 50) should return None"
+        );
+    }
+
+    #[test]
+    fn refresh_returns_some_above_threshold() {
+        let history = synth_history(40); // 80 messages
+        std::env::set_var("SOPHON_NO_LLM_SUMMARY", "1");
+        let cfg = MemoryConfig::default();
+        let result = refresh_rolling_summary(&history, None, &cfg, 50);
+        std::env::remove_var("SOPHON_NO_LLM_SUMMARY");
+        let r = result.expect("threshold met → Some");
+        assert!(!r.summary.is_empty(), "summary should not be empty");
+        assert!(
+            r.summarized_until < history.len(),
+            "must leave a recent window outside the summary"
+        );
+        assert!(
+            history.len() - r.summarized_until >= 8,
+            "recent floor should keep at least 8 live messages, got {}",
+            history.len() - r.summarized_until
+        );
+    }
+
+    #[test]
+    fn refresh_skips_when_no_new_content_to_summarize() {
+        let history = synth_history(40); // 80 messages
+        std::env::set_var("SOPHON_NO_LLM_SUMMARY", "1");
+        let cfg = MemoryConfig::default();
+        let first = refresh_rolling_summary(&history, None, &cfg, 50)
+            .expect("first refresh should succeed");
+        // Same history, same threshold → no new tail → None
+        let second = refresh_rolling_summary(&history, Some(&first), &cfg, 50);
+        std::env::remove_var("SOPHON_NO_LLM_SUMMARY");
+        assert!(
+            second.is_none(),
+            "no new content since last refresh should yield None"
+        );
+    }
+
+    #[test]
+    fn compress_with_rolling_falls_back_when_state_is_stale() {
+        // Build a state that points past the end of the live history —
+        // simulates a reset() that wasn't propagated. Result must be
+        // identical to the no-rolling path.
+        let history = synth_history(5); // 10 messages
+        let stale = RollingSummary {
+            summary: "stale".to_string(),
+            summarized_until: 999,
+            refreshed_at: chrono::Utc::now(),
+        };
+        let cfg = MemoryConfig::default();
+        let with = compress_history_with_rolling(&history, Some(&stale), &cfg);
+        let without = compress_history(&history, &cfg);
+        // Recent messages set must match.
+        assert_eq!(with.recent_messages.len(), without.recent_messages.len());
+    }
+
+    #[test]
+    fn compress_with_rolling_uses_summary_when_state_is_valid() {
+        let history = synth_history(40);
+        std::env::set_var("SOPHON_NO_LLM_SUMMARY", "1");
+        let cfg = MemoryConfig::default();
+        let rolling = refresh_rolling_summary(&history, None, &cfg, 50).expect("Some");
+        let compressed = compress_history_with_rolling(&history, Some(&rolling), &cfg);
+        std::env::remove_var("SOPHON_NO_LLM_SUMMARY");
+        // Summary should match the rolling state (modulo budget trim).
+        assert!(
+            !compressed.summary.is_empty(),
+            "compress_with_rolling must serve the rolling summary"
+        );
+        // Recent messages should be the un-summarised tail.
+        let expected_recent_len = history.len() - rolling.summarized_until;
+        assert!(
+            compressed.recent_messages.len() <= expected_recent_len,
+            "recent should be ≤ tail length (budget may trim)"
+        );
+    }
+
+    #[test]
+    fn compress_with_rolling_no_state_matches_baseline() {
+        let history = synth_history(15);
+        std::env::set_var("SOPHON_NO_LLM_SUMMARY", "1");
+        let cfg = MemoryConfig::default();
+        let with_none = compress_history_with_rolling(&history, None, &cfg);
+        let baseline = compress_history(&history, &cfg);
+        std::env::remove_var("SOPHON_NO_LLM_SUMMARY");
+        // No rolling state → identical to baseline.
+        assert_eq!(with_none.summary, baseline.summary);
+        assert_eq!(
+            with_none.recent_messages.len(),
+            baseline.recent_messages.len()
+        );
+        assert_eq!(with_none.token_count, baseline.token_count);
     }
 }

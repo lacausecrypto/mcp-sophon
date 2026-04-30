@@ -27,6 +27,10 @@ pub enum FlagScope {
     Transport,
     Retrieval,
     Llm,
+    /// Conversation memory & summary maintenance (rolling summary,
+    /// thresholds). Distinct from `Llm` because rolling state is
+    /// useful even without an LLM configured (heuristic fallback).
+    Memory,
     /// Experimental / recall-chasing flags kept for backwards compat
     /// but flagged as deprecated by the v0.5.0 pure-compression
     /// re-scope (see [project_sophon_positioning]).
@@ -41,6 +45,7 @@ impl FlagScope {
             FlagScope::Transport => "transport",
             FlagScope::Retrieval => "retrieval",
             FlagScope::Llm => "llm",
+            FlagScope::Memory => "memory",
             FlagScope::DeprecatedRecall => "deprecated-recall",
             FlagScope::Debug => "debug",
         }
@@ -156,6 +161,19 @@ impl RuntimeFlag {
             scope: FlagScope::Llm,
             kind: FlagKind::Bool,
             description: "Explicit opt-out from block-based Haiku summary; falls back to heuristic.",
+        },
+        // -------- rolling summary (v0.5.2 phase-2B) --------
+        RuntimeFlag {
+            name: "SOPHON_ROLLING_SUMMARY",
+            scope: FlagScope::Memory,
+            kind: FlagKind::Bool,
+            description: "Maintain a rolling summary at update_memory time so compress_history serves it without re-summarising the full history per query (5-8 s LLM spike → ~1 ms).",
+        },
+        RuntimeFlag {
+            name: "SOPHON_ROLLING_THRESHOLD",
+            scope: FlagScope::Memory,
+            kind: FlagKind::UInt { min: 10, max: 100_000 },
+            description: "Refresh the rolling summary once the un-summarised tail reaches this many messages. Defaults to 50; sanity floor 10.",
         },
         // -------- debug --------
         RuntimeFlag {
