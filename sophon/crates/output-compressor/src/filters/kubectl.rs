@@ -9,21 +9,39 @@ fn rx(p: &str) -> Regex {
     Regex::new(p).expect("valid regex")
 }
 
-/// `kubectl get` — extract only the operationally useful columns:
-/// NAME, READY, STATUS, AGE.
+/// `kubectl get` — extract only the operationally useful columns
+/// (NAME, READY, STATUS, AGE) from tabular output, or apply
+/// structural JSON compression when the user passed `-o json`.
+///
+/// Strategy order matters: `JsonStructural` is content-aware and
+/// no-ops on tabular text, so chaining it before `ExtractColumns`
+/// gives the right behaviour for both shapes without a separate
+/// filter.
+///
+/// `max_output_tokens = 1200` is generous enough to fit ~5 pretty-
+/// printed pod records in JSON form (each ~150-200 tokens) without
+/// the budget-cap truncate decimating the structured output that
+/// JsonStructural already bounded. Tabular output is rarely > 800
+/// tokens so the cap still kicks in usefully there.
 pub fn kubectl_get_filter() -> FilterConfig {
     FilterConfig {
         name: "kubectl_get",
         command_patterns: vec![rx(r"^\s*kubectl\s+get\b")],
-        strategies: vec![CompressionStrategy::ExtractColumns {
-            fields: vec![
-                "NAME".to_string(),
-                "READY".to_string(),
-                "STATUS".to_string(),
-                "AGE".to_string(),
-            ],
-        }],
-        max_output_tokens: Some(400),
+        strategies: vec![
+            CompressionStrategy::JsonStructural {
+                keep_first_items: 5,
+                max_string_chars: 200,
+            },
+            CompressionStrategy::ExtractColumns {
+                fields: vec![
+                    "NAME".to_string(),
+                    "READY".to_string(),
+                    "STATUS".to_string(),
+                    "AGE".to_string(),
+                ],
+            },
+        ],
+        max_output_tokens: Some(1200),
         preserve_head: 1,
         preserve_tail: 0,
     }

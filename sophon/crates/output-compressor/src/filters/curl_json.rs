@@ -9,13 +9,22 @@ fn rx(p: &str) -> Regex {
     Regex::new(p).expect("valid regex")
 }
 
-/// `curl`, `httpie`, `http ` — if the output looks like JSON, truncate
-/// to 50 lines. Always keep HTTP status lines.
+/// `curl`, `httpie`, `http ` — when the body is JSON, apply
+/// structural compression (truncate long arrays, clip long string
+/// values) before the line-level pipeline. Always keep HTTP status
+/// lines.
 pub fn curl_json_filter() -> FilterConfig {
     FilterConfig {
         name: "curl_json",
         command_patterns: vec![rx(r"^\s*curl\b"), rx(r"^\s*httpie\b"), rx(r"^\s*http\s")],
         strategies: vec![
+            // Structural pass first — collapses long arrays in the
+            // JSON body before line-based truncation runs. No-op on
+            // non-JSON input.
+            CompressionStrategy::JsonStructural {
+                keep_first_items: 5,
+                max_string_chars: 240,
+            },
             // Drop blank lines
             CompressionStrategy::FilterLines {
                 remove_patterns: vec![rx(r"^\s*$")],

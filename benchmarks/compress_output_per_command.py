@@ -289,6 +289,107 @@ SAMPLES: list[tuple[str, str]] = [
             for i in range(30)
         ),
     ),
+    # ---- JSON-heavy samples (added v0.5.3 to exercise JsonStructural) ----
+    (
+        "kubectl get pods -o json",
+        json.dumps(
+            {
+                "kind": "List",
+                "apiVersion": "v1",
+                "items": [
+                    {
+                        "kind": "Pod",
+                        "apiVersion": "v1",
+                        "metadata": {
+                            "name": f"app-deployment-{i}-{abs(hash(i)) % 100000:05d}",
+                            "namespace": "production" if i % 3 else "staging",
+                            "uid": f"abc-{i}-def-{abs(hash(i)) % 99999}",
+                            "resourceVersion": str(1000000 + i * 17),
+                            "labels": {
+                                "app": f"service-{i % 8}",
+                                "version": f"v1.{i % 12}.{i % 30}",
+                                "tier": "backend",
+                            },
+                        },
+                        "spec": {
+                            "containers": [
+                                {
+                                    "name": "main",
+                                    "image": f"registry.example.com/service-{i % 8}:v1.{i % 12}.{i % 30}",
+                                    "resources": {
+                                        "requests": {"cpu": "100m", "memory": "256Mi"},
+                                        "limits": {"cpu": "500m", "memory": "1Gi"},
+                                    },
+                                }
+                            ],
+                            "nodeName": f"node-{i % 12}",
+                        },
+                        "status": {
+                            "phase": "Running",
+                            "podIP": f"10.0.{i // 8}.{i % 256}",
+                            "startTime": "2026-04-20T19:00:00Z",
+                        },
+                    }
+                    for i in range(50)
+                ],
+            },
+            indent=2,
+        ),
+    ),
+    (
+        "aws s3api list-objects-v2 --bucket data-archive --output json",
+        json.dumps(
+            {
+                "Contents": [
+                    {
+                        "Key": f"archive/2026/04/data-{i:06d}.parquet",
+                        "LastModified": "2026-04-20T19:00:00.000Z",
+                        "ETag": f'"{abs(hash(i)) % (10**32):032x}"',
+                        "Size": (i + 1) * 1024 * 1024 + (i * 7) % 9999,
+                        "StorageClass": "STANDARD_IA" if i % 2 else "STANDARD",
+                        "Owner": {
+                            "DisplayName": "data-team",
+                            "ID": "abc123def456" + str(i % 100),
+                        },
+                    }
+                    for i in range(80)
+                ],
+                "Name": "data-archive",
+                "Prefix": "archive/2026/04/",
+                "MaxKeys": 1000,
+                "EncodingType": "url",
+                "KeyCount": 80,
+                "IsTruncated": False,
+            },
+            indent=2,
+        ),
+    ),
+    (
+        "gh api repos/lacausecrypto/mcp-sophon/issues",
+        json.dumps(
+            [
+                {
+                    "url": f"https://api.github.com/repos/lacausecrypto/mcp-sophon/issues/{i}",
+                    "id": 1000000 + i,
+                    "node_id": f"I_kw{abs(hash(i)) % (10**14):014d}",
+                    "number": i,
+                    "title": f"Issue {i}: tracking refactor of module_{i % 12}",
+                    "user": {
+                        "login": f"contributor-{i % 7}",
+                        "id": 50000 + (i % 7),
+                        "type": "User",
+                    },
+                    "state": "open" if i % 4 else "closed",
+                    "comments": i % 15,
+                    "created_at": "2026-04-15T10:00:00Z",
+                    "updated_at": "2026-04-20T15:00:00Z",
+                    "body": f"Description for issue {i}. Lorem ipsum dolor sit amet, consectetur adipiscing elit. " * 3,
+                }
+                for i in range(40)
+            ],
+            indent=2,
+        ),
+    ),
 ]
 
 

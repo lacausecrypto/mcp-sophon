@@ -14,6 +14,15 @@ pub fn generic_filter() -> FilterConfig {
         name: "generic",
         command_patterns: vec![rx(r".*")],
         strategies: vec![
+            // Try structural JSON compression first — if the input
+            // parses as JSON, this is a much higher-leverage win
+            // than per-line dedup. Non-JSON input is short-circuit
+            // rejected (single-byte sniff) so this is essentially
+            // free for plain text.
+            CompressionStrategy::JsonStructural {
+                keep_first_items: 5,
+                max_string_chars: 240,
+            },
             CompressionStrategy::FilterLines {
                 remove_patterns: vec![rx(r"^\s*$")],
                 keep_patterns: vec![],
