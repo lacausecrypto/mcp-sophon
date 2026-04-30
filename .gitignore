@@ -56,6 +56,7 @@ sophon-py/target/
 /tmp/sophon_bench/
 benchmarks/data/
 benchmarks/*.json
+!benchmarks/baseline.json
 !benchmarks/*.py
 !benchmarks/*.md
 

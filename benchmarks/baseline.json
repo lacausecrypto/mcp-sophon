@@ -1,0 +1,17 @@
+{
+  "cold_start_and_footprint": {
+    "binary_size_bytes": 5251888.0,
+    "cold_start_ms_p50": 34.086083000000016,
+    "cold_start_ms_p99": 47.735541,
+    "rss_idle_mb": 41.03125
+  },
+  "compress_output_per_command": {
+    "aggregate_saved_pct": 90.11277783860724,
+    "mean_saved_pct": 62.432444798269316
+  },
+  "session_scaling_curve": {
+    "compress_history_p50_ms": 2.437874999999992,
+    "compress_history_p99_ms": 45.650125,
+    "update_memory_p99_ms": 1.3127920000000002
+  }
+}

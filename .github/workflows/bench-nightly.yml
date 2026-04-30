@@ -1,0 +1,89 @@
+name: Benchmark vs baseline
+
+on:
+  # Nightly catch for silent perf drift on main.
+  schedule:
+    - cron: '0 3 * * *'  # 03:00 UTC daily
+  # Run on PRs that touch perf-sensitive paths so reviewers see the
+  # regression report without having to run the suite locally.
+  pull_request:
+    paths:
+      - 'sophon/crates/**'
+      - 'benchmarks/**'
+      - '.github/workflows/bench-nightly.yml'
+  # Manual fire (for re-baselining after a deliberate change).
+  workflow_dispatch:
+    inputs:
+      update_baseline:
+        description: 'Refresh benchmarks/baseline.json from this run'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+# Cancel stale runs on the same ref when a newer push lands — bench
+# wall-clock is non-trivial.
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write          # so workflow_dispatch can commit a baseline refresh
+
+jobs:
+  bench:
+    name: bench (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          # Bench results depend on the exact compiler version —
+          # cache by toolchain so a Rust upgrade triggers a clean
+          # rebuild + a (potentially) updated baseline.
+          cache-key: bench-${{ hashFiles('sophon/Cargo.lock') }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build release binary
+        working-directory: sophon
+        run: cargo build --release --bin sophon -p mcp-integration
+
+      - name: Run bench suite vs baseline
+        env:
+          SOPHON_BIN: ${{ github.workspace }}/sophon/target/release/sophon
+        run: |
+          if [ "${{ github.event.inputs.update_baseline }}" = "true" ]; then
+            python3 benchmarks/run_all_with_baseline.py --update-baseline
+          else
+            python3 benchmarks/run_all_with_baseline.py
+          fi
+
+      - name: Commit refreshed baseline (manual trigger only)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.update_baseline == 'true' }}
+        run: |
+          if git diff --quiet -- benchmarks/baseline.json; then
+            echo "Baseline unchanged — nothing to commit."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add benchmarks/baseline.json
+          git commit -m "chore(bench): refresh baseline from CI run #${{ github.run_id }}"
+          git push origin HEAD:${{ github.ref_name }}
+
+      - name: Upload bench output as artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-output-${{ github.run_id }}
+          path: |
+            benchmarks/baseline.json
+          retention-days: 30
