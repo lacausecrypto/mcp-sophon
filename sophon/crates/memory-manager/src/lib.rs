@@ -83,7 +83,10 @@ fn read_rolling_sidecar(history_path: &std::path::Path) -> Option<RollingSummary
     serde_json::from_str(&raw).ok()
 }
 
-fn write_rolling_sidecar(history_path: &std::path::Path, rolling: &RollingSummary) -> std::io::Result<()> {
+fn write_rolling_sidecar(
+    history_path: &std::path::Path,
+    rolling: &RollingSummary,
+) -> std::io::Result<()> {
     let p = rolling_summary_path(history_path);
     if let Some(parent) = p.parent() {
         fs::create_dir_all(parent)?;

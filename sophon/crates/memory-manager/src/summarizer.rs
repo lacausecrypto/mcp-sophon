@@ -575,7 +575,7 @@ mod rolling_tests {
     #[test]
     fn refresh_returns_none_below_threshold() {
         let history = synth_history(20); // 40 messages
-        // SOPHON_NO_LLM_SUMMARY guarantees deterministic heuristic path
+                                         // SOPHON_NO_LLM_SUMMARY guarantees deterministic heuristic path
         std::env::set_var("SOPHON_NO_LLM_SUMMARY", "1");
         let cfg = MemoryConfig::default();
         let result = refresh_rolling_summary(&history, None, &cfg, 50);

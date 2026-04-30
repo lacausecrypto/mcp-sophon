@@ -127,10 +127,7 @@ fn manager_default_does_not_use_rolling() {
     let mut mgr = MemoryManager::new(MemoryConfig::default());
     let msgs = generate_test_conversation(40);
     mgr.append(msgs.clone());
-    assert!(
-        !mgr.rolling_enabled(),
-        "rolling must be off by default"
-    );
+    assert!(!mgr.rolling_enabled(), "rolling must be off by default");
     assert!(mgr.rolling_summary().is_none());
     let snap = mgr.snapshot();
     let baseline = compress_history(&msgs, &MemoryConfig::default());
@@ -157,10 +154,7 @@ fn manager_enabled_fires_after_threshold() {
         .rolling_summary()
         .expect("threshold crossed → rolling state populated");
     assert!(!r.summary.is_empty(), "rolling summary must not be empty");
-    assert!(
-        r.summarized_until > 0,
-        "summarized_until must move past 0"
-    );
+    assert!(r.summarized_until > 0, "summarized_until must move past 0");
     assert!(
         mgr.history_len() - r.summarized_until >= 8,
         "recent floor must keep ≥ 8 live messages"
@@ -183,7 +177,9 @@ fn manager_snapshot_is_fast_when_rolling_active() {
     // can shorten it but can't ADD content the cache didn't have).
     assert!(
         cached_summary.contains(&snap.summary[..snap.summary.len().min(20)])
-            || snap.summary.contains(&cached_summary[..cached_summary.len().min(20)]),
+            || snap
+                .summary
+                .contains(&cached_summary[..cached_summary.len().min(20)]),
         "snapshot must serve cached summary, got new={:?} cached={:?}",
         snap.summary,
         cached_summary,
@@ -240,7 +236,10 @@ fn manager_reset_clears_rolling_and_sidecar() {
     assert!(sidecar_path.exists(), "sidecar should exist before reset");
 
     mgr.reset();
-    assert!(mgr.rolling_summary().is_none(), "reset clears in-memory state");
+    assert!(
+        mgr.rolling_summary().is_none(),
+        "reset clears in-memory state"
+    );
     assert!(
         !sidecar_path.exists(),
         "reset deletes sidecar file from disk"
