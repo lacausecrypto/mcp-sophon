@@ -203,11 +203,15 @@ impl SophonServer {
     /// single malformed request. Returns `Ok(None)` only for incoming
     /// notifications (no `id`) that require no reply.
     ///
-    /// MCP protocol version advertised: `2025-06-18`. Cancellations are
-    /// acknowledged but not propagated — tool execution is synchronous
-    /// inside `handle_tool_call`, so there is no mid-flight interrupt
-    /// hook yet (see tracking note in the `notifications/cancelled`
-    /// arm).
+    /// MCP protocol version advertised: `2025-06-18`. As of v0.5.4,
+    /// `tools/call` requests dispatched through `run_stdio` are run on
+    /// a dedicated `spawn_blocking` task; `notifications/cancelled` is
+    /// intercepted by `run_stdio` and triggers a `CancellationToken`
+    /// that drops the in-flight response if it arrives before the
+    /// tool finishes. The in-flight CPU work itself is **not yet**
+    /// interrupted mid-flight — cooperative interrupt hooks for the
+    /// long ops (`compress_history`, `retrieve`, …) are deferred to
+    /// v0.5.5.
     pub fn handle_json_rpc_message(&mut self, message: &Value) -> anyhow::Result<Option<Value>> {
         use crate::jsonrpc::{
             classify_anyhow, error_response, INVALID_PARAMS, METHOD_NOT_FOUND,
@@ -400,48 +404,214 @@ impl SophonServer {
         }
     }
 
-    pub async fn run_stdio(mut self) -> anyhow::Result<()> {
+    pub async fn run_stdio(self) -> anyhow::Result<()> {
         use crate::jsonrpc::{error_response, PARSE_ERROR};
-        use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use std::sync::Arc;
+        use tokio::io::{self, AsyncBufReadExt, BufReader};
+        use tokio::sync::Mutex;
+        use tokio_util::sync::CancellationToken;
+
+        // Shared state under tokio::sync::Mutex so the server can be
+        // borrowed by both the inline path (initialize, ping,
+        // tools/list, notifications/cancelled) and the spawned tool
+        // tasks. Tools acquire the lock just for the duration of their
+        // sync `handle_tool_call` body — readers and other inline
+        // requests are blocked while a tool runs (intentional for now;
+        // v0.5.5 will split RO/RW dispatch to allow concurrent reads).
+        let server = Arc::new(Mutex::new(self));
+
+        // Cancellation registry: maps an in-flight tools/call request_id
+        // to its CancellationToken. notifications/cancelled looks up by
+        // id and triggers cancel; the spawned task removes itself when
+        // it finishes (or is cancelled).
+        let pending: Arc<Mutex<HashMap<String, CancellationToken>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+
+        // Stdout is shared across spawned tool tasks. Wrap in a Mutex
+        // so concurrent tasks can't interleave their JSON-RPC responses
+        // mid-line. Buffer flush happens per-write to keep responses
+        // visible immediately to the client.
+        let out: Arc<Mutex<io::BufWriter<io::Stdout>>> =
+            Arc::new(Mutex::new(io::BufWriter::new(io::stdout())));
 
         let stdin = io::stdin();
-        let stdout = io::stdout();
         let mut lines = BufReader::new(stdin).lines();
-        let mut out = io::BufWriter::new(stdout);
+        // Track every spawned tool task so we can drain them on
+        // stdin EOF — without this, a client that closes the pipe
+        // immediately after issuing a request would race the
+        // spawn/response and miss the reply.
+        let mut tool_tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
 
-        // MCP JSON-RPC over stdio (line-delimited JSON objects).
         while let Some(line) = lines.next_line().await? {
             let parsed: Value = match serde_json::from_str(&line) {
                 Ok(value) => value,
                 Err(err) => {
                     let error =
                         error_response(Value::Null, PARSE_ERROR, format!("parse error: {}", err));
-                    let serialized = serde_json::to_string(&error).unwrap_or_else(|_| {
-                        String::from(
-                            r#"{"jsonrpc":"2.0","error":{"code":-32700,"message":"parse error"}}"#,
-                        )
-                    });
-                    out.write_all(format!("{}\n", serialized).as_bytes())
-                        .await?;
-                    out.flush().await?;
+                    write_response(&out, &error).await?;
                     continue;
                 }
             };
 
-            // handle_json_rpc_message is infallible-by-design: every error
-            // path becomes a JSON-RPC error response. The `?` below only
-            // fires on unexpected panic-adjacent conditions; keep it so
-            // bugs surface instead of being silently swallowed.
-            if let Some(response) = self.handle_json_rpc_message(&parsed)? {
-                let serialized = serde_json::to_string(&response).unwrap_or_default();
-                out.write_all(format!("{}\n", serialized).as_bytes())
-                    .await?;
-                out.flush().await?;
+            let method = parsed
+                .get("method")
+                .and_then(|m| m.as_str())
+                .unwrap_or_default();
+
+            // Hot path: tools/call gets dispatched as a spawned task so
+            // a long-running tool can be cancelled by a subsequent
+            // `notifications/cancelled`. Everything else is cheap and
+            // stays inline on the loop thread to keep dispatch latency
+            // low.
+            if method == "tools/call" {
+                let id = parsed.get("id").cloned().unwrap_or(Value::Null);
+                let id_key = canonical_id_key(&id);
+                let token = CancellationToken::new();
+                pending.lock().await.insert(id_key.clone(), token.clone());
+
+                let server_for_task = Arc::clone(&server);
+                let pending_for_task = Arc::clone(&pending);
+                let out_for_task = Arc::clone(&out);
+                let parsed_for_task = parsed.clone();
+
+                tool_tasks.spawn(async move {
+                    let work = {
+                        let server = Arc::clone(&server_for_task);
+                        let parsed = parsed_for_task.clone();
+                        tokio::task::spawn_blocking(move || {
+                            // blocking_lock is OK inside spawn_blocking —
+                            // we're on a dedicated blocking-IO thread,
+                            // not on a runtime worker.
+                            let mut srv = server.blocking_lock();
+                            srv.handle_json_rpc_message(&parsed)
+                        })
+                    };
+
+                    let resp_opt: Option<Value> = tokio::select! {
+                        biased;
+                        // Cancellation wins ties so a fast-arriving cancel
+                        // for a fast-completing tool is still honoured.
+                        _ = token.cancelled() => {
+                            tracing::debug!(
+                                request_id = %id,
+                                "tools/call cancelled before completion — response dropped"
+                            );
+                            None
+                        }
+                        result = work => match result {
+                            Ok(Ok(opt)) => opt,
+                            Ok(Err(e)) => {
+                                tracing::warn!(
+                                    request_id = %id,
+                                    error = %e,
+                                    "tools/call dispatcher returned Err — surfacing as JSON-RPC error"
+                                );
+                                Some(error_response(
+                                    id.clone(),
+                                    crate::jsonrpc::INTERNAL_ERROR,
+                                    format!("internal error: {}", e),
+                                ))
+                            }
+                            Err(join_err) => {
+                                tracing::error!(
+                                    request_id = %id,
+                                    error = %join_err,
+                                    "tools/call task panicked"
+                                );
+                                Some(error_response(
+                                    id.clone(),
+                                    crate::jsonrpc::INTERNAL_ERROR,
+                                    "internal error: tool task panicked".to_string(),
+                                ))
+                            }
+                        }
+                    };
+
+                    pending_for_task.lock().await.remove(&id_key);
+
+                    if let Some(response) = resp_opt {
+                        if let Err(e) = write_response(&out_for_task, &response).await {
+                            tracing::error!(error = %e, "failed to write tool response");
+                        }
+                    }
+                });
+                continue;
+            }
+
+            // Inline path: initialize / ping / tools/list / notifications/*.
+            // notifications/cancelled gets special handling — it must
+            // look up the cancellation token and trigger it before
+            // returning.
+            if method == "notifications/cancelled" {
+                let target_id = parsed
+                    .get("params")
+                    .and_then(|p| p.get("requestId"))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let target_key = canonical_id_key(&target_id);
+                let cancelled = {
+                    let mut map = pending.lock().await;
+                    if let Some(token) = map.remove(&target_key) {
+                        token.cancel();
+                        true
+                    } else {
+                        false
+                    }
+                };
+                tracing::debug!(
+                    request_id = %target_id,
+                    cancelled,
+                    "notifications/cancelled processed"
+                );
+                continue;
+            }
+
+            // Default inline dispatch.
+            let response_opt = {
+                let mut srv = server.lock().await;
+                srv.handle_json_rpc_message(&parsed)?
+            };
+            if let Some(response) = response_opt {
+                write_response(&out, &response).await?;
+            }
+        }
+
+        // Drain in-flight tool tasks before we let stdout drop. A
+        // client that closes the pipe immediately after issuing a
+        // request would otherwise race the spawn/response and miss
+        // the reply.
+        while let Some(joined) = tool_tasks.join_next().await {
+            if let Err(e) = joined {
+                tracing::warn!(error = %e, "tool task did not complete cleanly");
             }
         }
 
         Ok(())
     }
+}
+
+/// Stable string key for a JSON-RPC `id` value. The MCP spec allows
+/// id to be a number, string, or null; we want all three to dedup
+/// correctly in the cancellation registry.
+fn canonical_id_key(id: &Value) -> String {
+    match id {
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => format!("s:{s}"),
+        Value::Null => "null".to_string(),
+        other => serde_json::to_string(other).unwrap_or_else(|_| String::from("?")),
+    }
+}
+
+async fn write_response(
+    out: &std::sync::Arc<tokio::sync::Mutex<tokio::io::BufWriter<tokio::io::Stdout>>>,
+    response: &Value,
+) -> anyhow::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let serialized = serde_json::to_string(response).unwrap_or_default();
+    let mut guard = out.lock().await;
+    guard.write_all(format!("{serialized}\n").as_bytes()).await?;
+    guard.flush().await?;
+    Ok(())
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
