@@ -145,9 +145,7 @@ pub fn run_pipeline(command: &str, output: &str, filter: &FilterConfig) -> Compr
     // The bench `compress_output_per_command.py` surfaced this directly:
     // kubectl JSON went 12892 → 12 tokens, well below any reasonable
     // semantic floor.
-    let json_already_compressed = strategies_applied
-        .iter()
-        .any(|s| s == "json_structural");
+    let json_already_compressed = strategies_applied.iter().any(|s| s == "json_structural");
     if let Some(budget) = filter.max_output_tokens {
         if !json_already_compressed && count_tokens(current.as_ref()) > budget {
             // Heuristic: keep ~ `budget * 4` characters (~1 token per 4 chars).
@@ -224,7 +222,11 @@ fn apply_strategy(input: &str, strategy: &CompressionStrategy) -> String {
 /// pipeline can fall through to other strategies. Cheap: a JSON parse
 /// failure is fast for non-JSON text (the lexer rejects on the first
 /// non-whitespace, non-JSON character).
-pub(crate) fn json_structural(input: &str, keep_first_items: usize, max_string_chars: usize) -> String {
+pub(crate) fn json_structural(
+    input: &str,
+    keep_first_items: usize,
+    max_string_chars: usize,
+) -> String {
     // Quick reject: JSON has to start with `{`, `[`, `"`, a digit,
     // `-`, or one of `true|false|null`. Skip the parse attempt for
     // anything else — the typical command output (git status,
@@ -235,7 +237,10 @@ pub(crate) fn json_structural(input: &str, keep_first_items: usize, max_string_c
         Some(b) => *b,
         None => return input.to_string(),
     };
-    if !matches!(first, b'{' | b'[' | b'"' | b'-' | b'0'..=b'9' | b't' | b'f' | b'n') {
+    if !matches!(
+        first,
+        b'{' | b'[' | b'"' | b'-' | b'0'..=b'9' | b't' | b'f' | b'n'
+    ) {
         return input.to_string();
     }
 
@@ -513,10 +518,16 @@ mod tests {
             .collect();
         let input = serde_json::to_string_pretty(&items).unwrap();
         let out = json_structural(&input, 3, 0);
-        let parsed: serde_json::Value = serde_json::from_str(&out).expect("output must be valid JSON");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&out).expect("output must be valid JSON");
         let arr = parsed.as_array().expect("result is an array");
         // 3 kept entries + 1 marker string = 4 elements
-        assert_eq!(arr.len(), 4, "expected 3 items + tail marker, got {}", arr.len());
+        assert_eq!(
+            arr.len(),
+            4,
+            "expected 3 items + tail marker, got {}",
+            arr.len()
+        );
         // Last element is the marker string
         assert!(
             arr[3].as_str().unwrap_or("").contains("97 more items"),
@@ -544,7 +555,11 @@ mod tests {
         // Still parses
         let parsed: serde_json::Value = serde_json::from_str(&out).expect("valid JSON out");
         let log = parsed["log"].as_str().expect("log field still string");
-        assert!(log.len() < 200, "string should be clipped, got {} chars", log.len());
+        assert!(
+            log.len() < 200,
+            "string should be clipped, got {} chars",
+            log.len()
+        );
         assert!(parsed["id"] == 42, "non-string fields preserved");
     }
 

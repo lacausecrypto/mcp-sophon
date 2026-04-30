@@ -910,7 +910,10 @@ mod tests {
         let b = r#"{"type":"tool_use","name":"grep","input":{"path":"src","pattern":"foo"}}"#;
         let ca = detect_tool_use(a).unwrap();
         let cb = detect_tool_use(b).unwrap();
-        assert_eq!(ca, cb, "arg-order normalisation must produce identical canonical");
+        assert_eq!(
+            ca, cb,
+            "arg-order normalisation must produce identical canonical"
+        );
     }
 
     #[test]
