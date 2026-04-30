@@ -43,11 +43,41 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SOPHON = os.environ.get("SOPHON_BIN", str(ROOT / "sophon/target/release/sophon"))
 
-# Anthropic Claude 3.5 Sonnet pricing (per million tokens, USD).
-# Source: anthropic.com/pricing as of 2026-04. Update if it drifts.
-PRICE_INPUT_PER_MT = 3.00
-PRICE_CACHE_READ_PER_MT = 0.30
-PRICE_OUTPUT_PER_MT = 15.00
+# Anthropic Claude pricing (per million tokens, USD). Source:
+# anthropic.com/pricing as of 2026-04. Update via CLI flag if it
+# drifts.
+#
+# Defaults reflect **Opus 4.7** because that's what this repo's
+# real session was actually run on — using Sonnet pricing here
+# would understate the dollar savings by ~5×.
+#
+# Sonnet 4.6 / 3.5 (kept for the `--model sonnet` override):
+#   input        $ 3.00 / MT
+#   cache_read   $ 0.30 / MT
+#   output       $15.00 / MT
+#
+# Haiku 4.5 (kept for `--model haiku`):
+#   input        $ 0.80 / MT  (approximate; check anthropic.com)
+#   cache_read   $ 0.08 / MT
+#   output       $ 4.00 / MT
+PRICING = {
+    "opus": {
+        "input":      15.00,
+        "cache_read":  1.50,
+        "output":     75.00,
+    },
+    "sonnet": {
+        "input":       3.00,
+        "cache_read":  0.30,
+        "output":     15.00,
+    },
+    "haiku": {
+        "input":       0.80,
+        "cache_read":  0.08,
+        "output":      4.00,
+    },
+}
+DEFAULT_MODEL = "opus"
 
 
 def git_commits(since: str, until: str) -> list[dict]:
@@ -188,27 +218,38 @@ def bombs(commits: list[dict], top_n: int = 5) -> dict:
 # ============================================================================
 # C. USD translation
 # ============================================================================
-def usd_savings(tail_raw: int, tail_compressed: int, per_diff_raw: int, per_diff_compressed: int) -> dict:
-    """Two cost models:
-       1. Naive: every token costs $3/MT (no caching, fresh request).
-          Saved tokens directly translate to $.
+def usd_savings(
+    tail_raw: int,
+    tail_compressed: int,
+    per_diff_raw: int,
+    per_diff_compressed: int,
+    model: str,
+) -> dict:
+    """Two cost models, parametrised by `model` (`opus` / `sonnet` /
+    `haiku`):
+       1. Naive: every token costs the input rate (no caching, fresh
+          request). Saved tokens directly translate to $.
        2. Realistic: with prompt caching, the conversation history
-          is read at $0.30/MT after the first call. Sophon's
-          compression reduces the tail that has to be re-read each
-          turn. For a 25-turn loop where the cached prefix is read
-          25× and Sophon shrinks the tail by `tail_compress_pct`,
-          saved $ = saved_tokens * 25 * cache_read_price."""
+          is read at the cache-read rate after the first call.
+          Sophon's compression reduces the tail that has to be
+          re-read each turn. For a 25-turn loop where the cached
+          prefix is read 25× and Sophon shrinks the tail, saved $
+          = saved_tail_tokens * 25 * cache_read_price + saved_diff
+          _tokens * input_price (diffs are per-turn, not cached)."""
+    rates = PRICING[model]
     saved_history_tokens = tail_raw - tail_compressed
     saved_diffs_tokens = per_diff_raw - per_diff_compressed
     return {
+        "model": model,
         "saved_history_tokens": saved_history_tokens,
         "saved_diffs_tokens": saved_diffs_tokens,
-        "naive_input_usd": (saved_history_tokens + saved_diffs_tokens) / 1_000_000 * PRICE_INPUT_PER_MT,
+        "naive_input_usd":
+            (saved_history_tokens + saved_diffs_tokens) / 1_000_000 * rates["input"],
         "with_caching_25turn_reads_usd":
-            saved_history_tokens / 1_000_000 * 25 * PRICE_CACHE_READ_PER_MT
-            + saved_diffs_tokens / 1_000_000 * PRICE_INPUT_PER_MT,
-        "pricing_input_per_mt_usd": PRICE_INPUT_PER_MT,
-        "pricing_cache_read_per_mt_usd": PRICE_CACHE_READ_PER_MT,
+            saved_history_tokens / 1_000_000 * 25 * rates["cache_read"]
+            + saved_diffs_tokens / 1_000_000 * rates["input"],
+        "pricing_input_per_mt_usd": rates["input"],
+        "pricing_cache_read_per_mt_usd": rates["cache_read"],
     }
 
 
@@ -247,6 +288,16 @@ def main() -> int:
     parser.add_argument("--since", default="b197760~1")
     parser.add_argument("--until", default="HEAD")
     parser.add_argument("--top-n", type=int, default=5)
+    parser.add_argument(
+        "--model",
+        choices=list(PRICING.keys()),
+        default=DEFAULT_MODEL,
+        help=(
+            "Pricing model to use for the USD translation. Defaults to "
+            "`opus` because that's what this repo's real session was "
+            "run on — using sonnet/haiku here would understate savings."
+        ),
+    )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
@@ -272,22 +323,11 @@ def main() -> int:
     # For section C, we re-derive aggregates from per-type.
     tail_total_raw = sum(e["raw_tokens"] for e in a["per_type"])
     tail_total_compressed = sum(e["compressed_tokens"] for e in a["per_type"])
-    print("[C] USD translation…", file=sys.stderr)
-    c = usd_savings(
-        tail_raw=d["rolling_off_tokens"] * 12,  # approximate raw from msg count
-        tail_compressed=d["rolling_off_tokens"],
-        per_diff_raw=tail_total_raw,
-        per_diff_compressed=tail_total_compressed,
-    )
-
-    # Better: redo C with the real tail numbers from rolling_off run.
-    # rolling_compare already gives compressed numbers; we need raw for
-    # the tail. Compute raw via count_tokens on the concatenated bodies.
+    print(f"[C] USD translation (model={args.model})…", file=sys.stderr)
     full_blob = "\n".join(m["content"] for c0 in commits for m in commit_to_messages(c0))
-    tail_raw = rpc("count_tokens", {"text": full_blob}).get("token_count") or 0
-    tail_raw = int(tail_raw)
+    tail_raw = int(rpc("count_tokens", {"text": full_blob}).get("token_count") or 0)
     tail_compressed = d["rolling_off_tokens"]
-    c = usd_savings(tail_raw, tail_compressed, tail_total_raw, tail_total_compressed)
+    c = usd_savings(tail_raw, tail_compressed, tail_total_raw, tail_total_compressed, args.model)
 
     summary = {
         "git_range": f"{args.since}..{args.until}",
@@ -326,12 +366,20 @@ def main() -> int:
             f"{row['filter']:<14} {row['subject']}"
         )
 
-    print("\n[C] USD savings (Claude 3.5 Sonnet pricing)")
+    print(f"\n[C] USD savings (Claude {c['model'].title()} pricing)")
     print(f"  Tail (compress_history) saved tokens:        {c['saved_history_tokens']:>8}")
     print(f"  Diffs (compress_output) saved tokens:        {c['saved_diffs_tokens']:>8}")
-    print(f"  Naive input savings (single read, $3/MT):    ${c['naive_input_usd']:>7.4f}")
-    print(f"  With prompt caching (25-turn reads, $0.30):  ${c['with_caching_25turn_reads_usd']:>7.4f}")
-    print(f"    (input price: ${c['pricing_input_per_mt_usd']}/MT, cache read: ${c['pricing_cache_read_per_mt_usd']}/MT)")
+    print(
+        f"  Naive input savings (single read, "
+        f"${c['pricing_input_per_mt_usd']:.2f}/MT):  "
+        f"${c['naive_input_usd']:>7.4f}"
+    )
+    print(
+        f"  With prompt caching (25-turn reads, "
+        f"${c['pricing_cache_read_per_mt_usd']:.2f}/MT):  "
+        f"${c['with_caching_25turn_reads_usd']:>7.4f}"
+    )
+    print("    Pass --model sonnet or --model haiku to re-price for those tiers.")
 
     print("\n[D] Rolling summary on/off (heuristic mode, threshold=20)")
     print(f"  rolling OFF  →  {d['rolling_off_tokens']:>5} tokens (msg count {d['rolling_off_msgs']})")
