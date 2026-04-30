@@ -29,7 +29,10 @@ fn binary_path() -> PathBuf {
     p
 }
 
-fn drive_stdio(messages: &[serde_json::Value], wait: Duration) -> (Vec<serde_json::Value>, Duration) {
+fn drive_stdio(
+    messages: &[serde_json::Value],
+    wait: Duration,
+) -> (Vec<serde_json::Value>, Duration) {
     let bin = binary_path();
     assert!(
         bin.exists(),
@@ -115,7 +118,10 @@ fn three_tool_calls_no_cancel_all_responses_arrive() {
         }),
     ];
     let (responses, _) = drive_stdio(&msgs, Duration::from_millis(200));
-    let ids: Vec<_> = responses.iter().filter_map(|r| r.get("id").and_then(|v| v.as_i64())).collect();
+    let ids: Vec<_> = responses
+        .iter()
+        .filter_map(|r| r.get("id").and_then(|v| v.as_i64()))
+        .collect();
     assert!(ids.contains(&1), "init response missing");
     assert!(ids.contains(&2), "id=2 missing");
     assert!(ids.contains(&3), "id=3 missing");
@@ -175,7 +181,10 @@ fn cancel_for_in_flight_request_drops_response() {
         }),
     ];
     let (responses, _) = drive_stdio(&msgs, Duration::from_millis(50));
-    let ids: Vec<_> = responses.iter().filter_map(|r| r.get("id").and_then(|v| v.as_i64())).collect();
+    let ids: Vec<_> = responses
+        .iter()
+        .filter_map(|r| r.get("id").and_then(|v| v.as_i64()))
+        .collect();
 
     // init responds
     assert!(ids.contains(&1), "init response missing: {ids:?}");
@@ -224,9 +233,15 @@ fn cancel_for_unknown_request_id_is_a_safe_noop() {
         }),
     ];
     let (responses, _) = drive_stdio(&msgs, Duration::from_millis(150));
-    let ids: Vec<_> = responses.iter().filter_map(|r| r.get("id").and_then(|v| v.as_i64())).collect();
+    let ids: Vec<_> = responses
+        .iter()
+        .filter_map(|r| r.get("id").and_then(|v| v.as_i64()))
+        .collect();
     assert!(ids.contains(&1), "init missing: {ids:?}");
-    assert!(ids.contains(&7), "post-noop-cancel request missing: {ids:?}");
+    assert!(
+        ids.contains(&7),
+        "post-noop-cancel request missing: {ids:?}"
+    );
 }
 
 #[test]

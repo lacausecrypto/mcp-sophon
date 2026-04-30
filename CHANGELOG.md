@@ -9,6 +9,102 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 with additional **Measured** / **Honest findings** sections for bench
 results and failed experiments.
 
+## [0.5.4] — 2026-04-30
+
+Async dispatch + working `notifications/cancelled` + measured
+tool-call dedup.
+
+### Feat — async tool dispatch with cancellation
+
+`run_stdio` was a single-threaded loop that called
+`handle_json_rpc_message` synchronously per message. A client
+`notifications/cancelled` arriving while a long
+`compress_history` was running couldn't even be parsed until the
+tool returned, let alone do anything useful — the v0.5.0 ack-only
+no-op the docstring already admitted.
+
+This release makes cancellation actually drop the response.
+
+* New dep: `tokio-util = "0.7"` for `CancellationToken`.
+* `SophonServer` now lives behind `Arc<tokio::sync::Mutex<>>`
+  inside `run_stdio`. The existing `&mut self` API on
+  `handle_json_rpc_message` and `handle_tool_call` is preserved.
+* New per-request registry
+  `Arc<Mutex<HashMap<String, CancellationToken>>>` keyed by the
+  canonical-string form of the JSON-RPC `id` (handles number,
+  string, and null id types symmetrically).
+* `tools/call` requests dispatch as `tokio::spawn` tasks
+  containing `spawn_blocking(handle_json_rpc_message)`,
+  `tokio::select!` against the cancellation token (biased to
+  win ties), with the response written through a shared
+  `Arc<Mutex<BufWriter<Stdout>>>`.
+* `notifications/cancelled` looks up the requestId in the
+  registry, calls `token.cancel()`, removes the entry. If the
+  cancel arrives before the response is written, the response
+  gets dropped.
+* Stdin EOF triggers a `JoinSet::join_next()` drain so a client
+  that closes the pipe immediately after issuing requests still
+  gets every response.
+
+#### Honest scope
+
+`spawn_blocking` work cannot be killed mid-flight by tokio. So:
+
+* A cancel **before** work finishes drops the response; the
+  in-flight CPU work runs to completion (wasted CPU, but the
+  client doesn't see the result).
+* A cancel **after** work finishes but before stdout was
+  written also drops the response (correct: client asked us
+  not to send it).
+* Cooperative interrupt (long ops poll a token, return early)
+  is **deferred to v0.5.5**. Plumbing requires touching
+  `compress_history`, `retrieve`, the LLM shell-out, and the
+  retriever indexing path.
+
+### Tests — `cancellation_e2e.rs`
+
+New ignored-by-default integration tests in
+`crates/mcp-integration/tests/cancellation_e2e.rs`. Spawn the
+release binary, drive it over stdio, assert response shape:
+
+* `three_tool_calls_no_cancel_all_responses_arrive` — sanity
+  for the JoinSet drain.
+* `cancel_for_in_flight_request_drops_response` — issues long
+  `compress_history` then cancels; asserts follow-up call still
+  works regardless of who wins the race.
+* `cancel_for_unknown_request_id_is_a_safe_noop` — cancel for
+  a never-issued id can't break the dispatcher.
+* `concurrent_pipeline_drains_all_responses` — 100 back-to-back
+  tool calls, every response present.
+
+Run via `cargo build --release && cargo test -p mcp-integration
+--test cancellation_e2e -- --include-ignored`. Local result:
+4/4 in 0.51 s.
+
+### Bench — `tool_call_dedup_effect.py`
+
+Closes the honest-scope debt from v0.5.3 commit e3c39a0
+("foundation, measured win deferred"). Drives a synthetic
+50-turn agent session modelled after a Claude-Code-shaped
+workload and reports the dedup factor measured directly from the
+chunk store JSONL.
+
+Default-shape result:
+  total tool_use messages:           50
+  unique canonical shapes:           13
+  redundant repeat calls:            37
+  tool_use chunks (after dedup):     13
+  **tool_use chunk reduction:        74.0 %**
+
+Caveats documented inline:
+* Win depends on session shape — 0 % saving on a workload with
+  zero repeated tool calls.
+* Real Claude Code sessions are *expected* to repeat the top-5
+  tool shapes ~60-70 % of all calls (the model the weights were
+  picked against).
+* `tool_result` chunks are intentionally NOT collapsed (varies
+  per invocation).
+
 ## [0.5.3] — 2026-04-30
 
 Tier 1 follow-up to v0.5.2. Three structural wins ship together:

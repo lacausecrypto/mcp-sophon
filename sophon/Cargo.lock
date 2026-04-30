@@ -464,7 +464,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cli-hooks"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "anyhow",
  "once_cell",
@@ -477,7 +477,7 @@ dependencies = [
 
 [[package]]
 name = "codebase-navigator"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "anyhow",
  "ignore",
@@ -707,7 +707,7 @@ dependencies = [
 
 [[package]]
 name = "delta-streamer"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "criterion",
  "regex",
@@ -1067,7 +1067,7 @@ dependencies = [
 
 [[package]]
 name = "fragment-cache"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "chrono",
  "regex",
@@ -2048,7 +2048,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-integration"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2088,7 +2088,7 @@ dependencies = [
 
 [[package]]
 name = "memory-manager"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "chrono",
  "criterion",
@@ -2460,7 +2460,7 @@ dependencies = [
 
 [[package]]
 name = "output-compressor"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "chrono",
  "once_cell",
@@ -2658,7 +2658,7 @@ dependencies = [
 
 [[package]]
 name = "prompt-compressor"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "chrono",
  "criterion",
@@ -3190,7 +3190,7 @@ dependencies = [
 
 [[package]]
 name = "semantic-retriever"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -3384,7 +3384,7 @@ dependencies = [
 
 [[package]]
 name = "sophon-core"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "chrono",
  "lazy_static",
@@ -3397,7 +3397,7 @@ dependencies = [
 
 [[package]]
 name = "sophon-storage"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "chrono",
  "rusqlite",

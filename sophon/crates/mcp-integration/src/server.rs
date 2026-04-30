@@ -609,7 +609,9 @@ async fn write_response(
     use tokio::io::AsyncWriteExt;
     let serialized = serde_json::to_string(response).unwrap_or_default();
     let mut guard = out.lock().await;
-    guard.write_all(format!("{serialized}\n").as_bytes()).await?;
+    guard
+        .write_all(format!("{serialized}\n").as_bytes())
+        .await?;
     guard.flush().await?;
     Ok(())
 }
