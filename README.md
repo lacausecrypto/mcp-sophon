@@ -48,11 +48,13 @@ Reproducible byte-for-byte by anyone with `cargo build --release`.
 
 | Metric | Value |
 |---|---|
-| **Tail `compress_history`** (30 commits / 116 messages) | **93.0 %** (50 743 → 3 576 tokens) |
+| **Tail `compress_history`** (30+ commits / 120+ messages) | **93.0 %** (50 743 → 3 576 tokens) |
 | **Per-diff `compress_output`** (weighted aggregate) | **88.1 %** (85 579 → 9 886 tokens) |
 | **Compression growth with session length** | 68 % at 5 commits → **93 % at 30 commits** |
-| **Naive USD saved** (Claude 3.5 Sonnet input pricing) | $0.37 / session |
-| **With prompt caching** (25-turn reads at $0.30/MT) | $0.59 / session |
+| **Naive USD saved** (Claude **Opus 4.7** input pricing, $15/MT) | **$2.03 / session** |
+| **With prompt caching** (25-turn reads at $1.50/MT) | **$3.24 / session** |
+
+> Opus pricing is ~5× Sonnet. Pass `--model sonnet` or `--model haiku` to `real_session_deep_dive.py` if you're re-pricing for a cheaper tier.
 
 #### Per-commit-type breakdown — where the win comes from
 
@@ -93,41 +95,6 @@ where an agent loop spends most of its tokens.
 | **Async tool dispatch** | `notifications/cancelled` actually drops the response | new in v0.5.4 | [`tests/cancellation_e2e.rs`](./sophon/crates/mcp-integration/tests/cancellation_e2e.rs) |
 
 Pass `--include-python-baseline` to `cold_start_and_footprint.py` to contrast against `python -c "import mem0"` / `sentence_transformers` / `langchain` on your machine.
-
-### New in v0.5.2 — rolling summary at ingest time
-
-`SOPHON_ROLLING_SUMMARY=1` makes `update_memory` build the
-conversation summary incrementally; `compress_history` then serves
-the cached state instead of re-summarising from scratch. With
-`SOPHON_LLM_CMD` configured this moves the 5-8 s LLM spike off the
-query path entirely. Sidecar persists at
-`<memory_path>.sophon-summary.json` so a restart resumes without
-re-summarising. See
-[`benchmarks/rolling_summary_effect.py`](./benchmarks/rolling_summary_effect.py)
-for the measurement harness; honest reporting includes the LLM-off
-case where the heuristic was already fast enough that no
-measurable speedup appears.
-
-### Phase-1 → phase-2 → tier-1 → v0.5.4 cumulative wins
-
-- **v0.5.1** — `tracing::instrument` on 5 hot-path entries; eager
-  tokenizer warm-up; embedding reuse on JSONL reopen;
-  `curl_verbose` filter (0.5 % → 60.3 %); `git_diff` dedup
-  (11.8 % → 51.8 %).
-- **v0.5.2** — release binary 8.6 MB → 5.2 MB (-39 %); rolling
-  summary at ingest time (`SOPHON_ROLLING_SUMMARY=1` moves the
-  5-8 s LLM spike off the query path).
-- **v0.5.3** — `JsonStructural` strategy in `compress_output`
-  (compress_output aggregate 83.1 % → 90.1 %); tool-call dedup
-  foundation in the chunker (`ChunkType::ToolUse`/`ToolResult`,
-  arg-order-normalised hash key); CI bench nightly + on-PR
-  regression alarm.
-- **v0.5.4** — async tool dispatch with `tokio::spawn_blocking`
-  + `JoinSet` drain; `notifications/cancelled` actually drops
-  the response via per-request `CancellationToken`; tool-call
-  dedup measured at **74 % chunk reduction** on a 50-turn
-  Claude-Code-shaped synthetic; first **real-session capture
-  bench** (this README's headline 93 %).
 
 ### Carried over from v0.4.0 (still on-thesis, unchanged)
 
