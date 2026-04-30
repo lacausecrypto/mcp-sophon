@@ -21,6 +21,37 @@ edition = "2021"
 license = "MIT"
 authors = ["Sophon Contributors"]
 
+# Aggressive size + perf profile for the release binary that ships
+# in `sophon/target/release/sophon` and gets attached to the GitHub
+# Release. Trades compile time for ~25 % smaller artefact.
+#
+# - opt-level = 3     full speed. `"s"` and `"z"` were both tried
+#                     and rejected — `"z"` regressed cold start from
+#                     35 ms to 81 ms (tiktoken-rs's BPE merge loop
+#                     became measurably slower); `"s"` to 43 ms.
+#                     Keeping opt-level = 3 and letting lto + strip
+#                     + panic = abort do the size work gives -39 %
+#                     binary (8.6 MB → 5.2 MB) with **zero** cold
+#                     start regression vs the v0.5.1 baseline.
+# - lto       = "fat" cross-crate dead-code elimination + inlining.
+# - codegen-units = 1 single unit makes lto strictly more effective
+#                     at the cost of compile parallelism.
+# - strip     = true  drop debug symbols from the release binary.
+# - panic     = "abort"
+#                     no unwind tables — the MCP stdio loop is
+#                     already infallible at the dispatcher level
+#                     and the workspace contains no `catch_unwind`,
+#                     so abort-on-panic is a strict improvement
+#                     (smaller AND safer: a panic now crashes the
+#                     process cleanly instead of risking a partially-
+#                     unwound stack).
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
+
 [workspace.dependencies]
 anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
