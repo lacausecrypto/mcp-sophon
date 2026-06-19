@@ -58,7 +58,20 @@ recall bench does not capture.
   claimed a win. Content stays in the store, retrievable via
   `decode_fragments`.
 
+### Performance
+- **`compress_history` no longer builds a thrown-away index (T3.1).** The
+  embedding-heavy `SemanticIndex` was built on every call and then stripped
+  from the response unless the caller passed `include_index` — pure wasted
+  work on the default path. It is now built only when actually requested.
+
 ### Fixed
+- **History relevance matches identifier components, not substrings (T3.3).**
+  The query-aware history summary scored a line by raw substring, so `age`
+  matched `page` and `storage` and pulled irrelevant lines into the summary.
+  It now matches whole tokens and their snake_case/camelCase parts, keeping
+  the intended wins (`age` ↦ `oldest_entry_age_seconds`, `cache` ↦
+  `cache.rs`) without the false positives. History recall 32.1% → 32.7% on
+  the N=51 bench; overall sophon−truncate +19.7 → +20.0 pts.
 - **Parser XML hijack (T1.2).** A single incidental `<tag>…</tag>` in a
   Markdown prompt used to flip the whole parse to the XML branch, dropping
   every `##` section (bench prompt-002: 17 tokens emitted of a ~700

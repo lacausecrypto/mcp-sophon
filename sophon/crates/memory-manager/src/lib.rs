@@ -204,6 +204,10 @@ impl MemoryManager {
         max_tokens: Option<usize>,
         recent_window: Option<usize>,
         query: Option<&str>,
+        // Whether the caller will actually use the dense SemanticIndex
+        // (i.e. requested `include_index`). When false we skip building it —
+        // it is embedding-heavy and otherwise stripped from the response.
+        want_index: bool,
     ) -> CompressedMemory {
         let mut cfg = self.config.clone();
         if let Some(max) = max_tokens {
@@ -212,7 +216,7 @@ impl MemoryManager {
         if let Some(win) = recent_window {
             cfg.recent_window = win;
         }
-        compress_history_query(messages, &cfg, query)
+        compress_history_query(messages, &cfg, query, want_index)
     }
 
     /// Append messages to the session history. If a persistence path is

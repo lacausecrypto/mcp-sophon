@@ -71,7 +71,7 @@ pub const DEFAULT_ROLLING_REFRESH_THRESHOLD: usize = 50;
     ),
 )]
 pub fn compress_history(messages: &[Message], config: &MemoryConfig) -> CompressedMemory {
-    compress_history_query(messages, config, None)
+    compress_history_query(messages, config, None, true)
 }
 
 /// Query-aware variant of [`compress_history`] (Tier 3). When `query` is
@@ -82,6 +82,11 @@ pub fn compress_history_query(
     messages: &[Message],
     config: &MemoryConfig,
     query: Option<&str>,
+    // Build the dense SemanticIndex. It is embedding-heavy and the
+    // `compress_history` MCP handler strips it from the response unless the
+    // caller opts in with `include_index`, so building it on the default
+    // path is pure wasted work. `false` skips it (empty index).
+    want_index: bool,
 ) -> CompressedMemory {
     if messages.is_empty() {
         return CompressedMemory {
@@ -164,7 +169,11 @@ pub fn compress_history_query(
         summary,
         stable_facts,
         recent_messages: recent.to_vec(),
-        index: build_index(messages),
+        index: if want_index {
+            build_index(messages)
+        } else {
+            SemanticIndex::default()
+        },
         token_count: 0,
         original_message_count: messages.len(),
     };
@@ -514,19 +523,69 @@ fn query_terms(query: &str) -> Vec<String> {
     terms
 }
 
-/// How many distinct query terms appear (case-insensitive substring) in a
-/// candidate line. Substring rather than token-equality so `cache.rs`
-/// matches a query mentioning `cache`, and `oldest_entry_age_seconds`
-/// matches `age`.
+/// How many distinct query terms match a candidate line, by *identifier
+/// component* rather than raw substring. The line is broken into its
+/// tokens, then each token into snake_case / camelCase / digit parts, and
+/// a term matches when it equals a whole token or one of those parts.
+///
+/// This keeps the wins that motivated the old substring match —
+/// `oldest_entry_age_seconds` still matches `age` (a snake part), `cache.rs`
+/// still matches `cache` — while dropping its false positives: `age` no
+/// longer matches `page` or `storage` (incidental substrings that are not
+/// identifier components), which used to pull irrelevant lines into the
+/// query-aware summary and lose the budget race.
 fn relevance_score(line: &str, q_terms: &[String]) -> u32 {
     if q_terms.is_empty() {
         return 0;
     }
-    let lower = line.to_lowercase();
+    let comps = identifier_components(line);
     q_terms
         .iter()
-        .filter(|t| lower.contains(t.as_str()))
+        .filter(|t| comps.contains(t.as_str()))
         .count() as u32
+}
+
+/// All identifier components of `line`, lowercased: each whitespace/symbol-
+/// delimited token, plus its snake_case parts, plus its camelCase / letter→
+/// digit boundary parts. Used by [`relevance_score`] so a query term can
+/// match an identifier sub-part without matching arbitrary substrings.
+fn identifier_components(line: &str) -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    for token in line.split(|c: char| !c.is_alphanumeric() && c != '_') {
+        if token.is_empty() {
+            continue;
+        }
+        set.insert(token.to_lowercase());
+        for snake in token.split('_') {
+            if snake.is_empty() {
+                continue;
+            }
+            set.insert(snake.to_lowercase());
+            // camelCase / letter→digit boundaries within the snake part.
+            let mut part = String::new();
+            let mut prev: Option<char> = None;
+            for c in snake.chars() {
+                let boundary = match prev {
+                    Some(p) => {
+                        (p.is_lowercase() && c.is_uppercase())
+                            || (p.is_alphabetic() && c.is_ascii_digit())
+                            || (p.is_ascii_digit() && c.is_alphabetic())
+                    }
+                    None => false,
+                };
+                if boundary && !part.is_empty() {
+                    set.insert(part.to_lowercase());
+                    part.clear();
+                }
+                part.push(c);
+                prev = Some(c);
+            }
+            if !part.is_empty() {
+                set.insert(part.to_lowercase());
+            }
+        }
+    }
+    set
 }
 
 /// LLM-backed abstractive summarization. Shells out to the command in
@@ -941,7 +1000,7 @@ mod rolling_tests {
             ..MemoryConfig::default()
         };
         // Must not panic regardless of query-aware ranking surfacing arrows.
-        let q = compress_history_query(&msgs, &cfg, Some("what ratio did the bench reach"));
+        let q = compress_history_query(&msgs, &cfg, Some("what ratio did the bench reach"), true);
         assert!(q.token_count <= 60 || !q.summary.is_empty());
         let blind = compress_history(&msgs, &cfg);
         let _ = blind;
@@ -1065,5 +1124,38 @@ mod rolling_tests {
             baseline.recent_messages.len()
         );
         assert_eq!(with_none.token_count, baseline.token_count);
+    }
+
+    #[test]
+    fn relevance_matches_identifier_components_not_substrings() {
+        let q = vec!["age".to_string()];
+        // snake_case component → matches
+        assert_eq!(
+            relevance_score("the oldest_entry_age_seconds method", &q),
+            1
+        );
+        // incidental substrings → no match (the old substring bug)
+        assert_eq!(relevance_score("turn the page now", &q), 0);
+        assert_eq!(relevance_score("sophon-storage crate", &q), 0);
+    }
+
+    #[test]
+    fn relevance_matches_dotted_and_camel_parts() {
+        assert_eq!(
+            relevance_score("see cache.rs line 10", &["cache".into()]),
+            1
+        );
+        assert_eq!(
+            relevance_score("call runRetrieval() here", &["retrieval".into()]),
+            1
+        );
+        // distinct terms accumulate
+        assert_eq!(
+            relevance_score(
+                "the cache.rs oldest_entry_age_seconds",
+                &["cache".into(), "age".into()]
+            ),
+            2
+        );
     }
 }

@@ -11,27 +11,27 @@
       "savings": 0.0
     },
     "sophon": {
-      "recall": 0.43440709617180207,
-      "savings": 0.6269253822863676
+      "recall": 0.43709150326797386,
+      "savings": 0.6265496232335032
     },
     "truncate": {
       "recall": 0.2373949579831933,
-      "savings": 0.631855935814193
+      "savings": 0.6314963225947219
     }
   },
   "delta_sophon_minus_truncate": {
-    "mean": 0.19701213818860877,
+    "mean": 0.1996965452847806,
     "ci95": [
-      0.10695611577964517,
-      0.29110644257703083
+      0.10905695611577965,
+      0.29516806722689076
     ],
     "n": 51
   },
   "delta_sophon_minus_oracle": {
-    "mean": -0.2526143790849673,
+    "mean": -0.2499299719887955,
     "ci95": [
-      -0.34147992530345467,
-      -0.1664799253034547
+      -0.33594771241830057,
+      -0.165359477124183
     ],
     "n": 51
   },
@@ -625,12 +625,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 1629,
-          "recall": 0.5,
+          "tokens": 1704,
+          "recall": 0.3333333333333333,
           "judged": true
         },
         "truncate": {
-          "tokens": 1628,
+          "tokens": 1704,
           "recall": 0.0,
           "judged": true
         }
@@ -649,12 +649,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 2190,
-          "recall": 0.2857142857142857,
+          "tokens": 2206,
+          "recall": 0.42857142857142855,
           "judged": true
         },
         "truncate": {
-          "tokens": 2191,
+          "tokens": 2201,
           "recall": 0.0,
           "judged": true
         }
@@ -673,12 +673,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 2101,
+          "tokens": 2092,
           "recall": 0.2857142857142857,
           "judged": true
         },
         "truncate": {
-          "tokens": 2101,
+          "tokens": 2092,
           "recall": 0.0,
           "judged": true
         }
@@ -697,12 +697,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 2026,
+          "tokens": 2041,
           "recall": 0.25,
           "judged": true
         },
         "truncate": {
-          "tokens": 1885,
+          "tokens": 1910,
           "recall": 0.0,
           "judged": true
         }
@@ -721,12 +721,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 1355,
+          "tokens": 1334,
           "recall": 0.875,
           "judged": true
         },
         "truncate": {
-          "tokens": 1347,
+          "tokens": 1326,
           "recall": 0.0,
           "judged": true
         }
@@ -745,12 +745,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 2144,
-          "recall": 0.0,
+          "tokens": 2141,
+          "recall": 0.125,
           "judged": true
         },
         "truncate": {
-          "tokens": 2101,
+          "tokens": 2096,
           "recall": 0.0,
           "judged": true
         }
@@ -769,12 +769,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 1974,
+          "tokens": 1987,
           "recall": 0.375,
           "judged": true
         },
         "truncate": {
-          "tokens": 1973,
+          "tokens": 1987,
           "recall": 0.0,
           "judged": true
         }
@@ -793,12 +793,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 1655,
+          "tokens": 1671,
           "recall": 0.375,
           "judged": true
         },
         "truncate": {
-          "tokens": 1658,
+          "tokens": 1674,
           "recall": 0.0,
           "judged": true
         }
@@ -817,12 +817,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 2016,
+          "tokens": 2028,
           "recall": 0.125,
           "judged": true
         },
         "truncate": {
-          "tokens": 1971,
+          "tokens": 1984,
           "recall": 0.0,
           "judged": true
         }
@@ -841,12 +841,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 1730,
+          "tokens": 1727,
           "recall": 0.42857142857142855,
           "judged": true
         },
         "truncate": {
-          "tokens": 1730,
+          "tokens": 1728,
           "recall": 0.0,
           "judged": true
         }
@@ -865,12 +865,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 1488,
-          "recall": 0.375,
+          "tokens": 1471,
+          "recall": 0.25,
           "judged": true
         },
         "truncate": {
-          "tokens": 1488,
+          "tokens": 1471,
           "recall": 0.0,
           "judged": true
         }
@@ -889,12 +889,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 1741,
+          "tokens": 1743,
           "recall": 0.0,
           "judged": true
         },
         "truncate": {
-          "tokens": 1673,
+          "tokens": 1674,
           "recall": 0.0,
           "judged": true
         }
@@ -937,7 +937,7 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 1520,
+          "tokens": 1519,
           "recall": 0.625,
           "judged": true
         },
@@ -985,12 +985,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 1472,
-          "recall": 0.14285714285714285,
+          "tokens": 1532,
+          "recall": 0.42857142857142855,
           "judged": true
         },
         "truncate": {
-          "tokens": 1379,
+          "tokens": 1434,
           "recall": 0.0,
           "judged": true
         }
@@ -1009,12 +1009,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 1685,
-          "recall": 0.125,
+          "tokens": 1695,
+          "recall": 0.0,
           "judged": true
         },
         "truncate": {
-          "tokens": 1660,
+          "tokens": 1669,
           "recall": 0.0,
           "judged": true
         }
@@ -1033,12 +1033,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 1394,
+          "tokens": 1374,
           "recall": 0.5714285714285714,
           "judged": true
         },
         "truncate": {
-          "tokens": 1394,
+          "tokens": 1374,
           "recall": 0.0,
           "judged": true
         }
@@ -1057,12 +1057,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 1448,
+          "tokens": 1431,
           "recall": 0.125,
           "judged": true
         },
         "truncate": {
-          "tokens": 1450,
+          "tokens": 1431,
           "recall": 0.0,
           "judged": true
         }
@@ -1081,12 +1081,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 1016,
+          "tokens": 1010,
           "recall": 0.0,
           "judged": true
         },
         "truncate": {
-          "tokens": 1016,
+          "tokens": 1009,
           "recall": 0.0,
           "judged": true
         }

@@ -174,6 +174,7 @@ pub fn handle_tool_call(
                 args.max_tokens,
                 args.recent_window,
                 query.as_deref(),
+                args.include_index,
             );
 
             let original_tokens: usize = messages.iter().map(|m| m.token_count).sum();
