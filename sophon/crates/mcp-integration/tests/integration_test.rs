@@ -129,6 +129,54 @@ fn test_mcp_jsonrpc_tools_list_and_call() {
 }
 
 #[test]
+fn encode_fragments_does_not_echo_full_fragment_content() {
+    // Regression (plan T0.3): the encode response must summarize newly
+    // registered fragments (id/hash/token_count/category) and NOT echo
+    // their `content`, which would re-send the bytes the placeholder just
+    // removed and make the first encode net-negative.
+    let mut server = SophonServer::new();
+    server
+        .handle_json_rpc_message(&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}))
+        .expect("initialize handled")
+        .expect("initialize response");
+
+    // A fenced code block large enough to be detected as a fragment
+    // (default min_fragment_tokens = 50).
+    let code = "fn compress(input: &str) -> String {\n    \
+        let tokens = tokenize(input);\n    \
+        let ranked = rank_by_relevance(tokens);\n    \
+        let kept = backfill_to_budget(ranked, MAX_TOKENS);\n    \
+        render(kept)\n}\n"
+        .repeat(4);
+    let content = format!("Here is the function:\n\n```rust\n{code}```\n\nEnd of doc.");
+
+    let call = server
+        .handle_json_rpc_message(&json!({
+            "jsonrpc":"2.0","id":2,"method":"tools/call",
+            "params":{"name":"encode_fragments","arguments":{"content": content}}
+        }))
+        .expect("tools/call handled")
+        .expect("tools/call response");
+
+    let structured = call
+        .pointer("/result/structuredContent")
+        .expect("structuredContent present");
+    let new_fragments = structured
+        .get("new_fragments")
+        .and_then(|v| v.as_array())
+        .expect("new_fragments array");
+    assert!(!new_fragments.is_empty(), "a fragment should be detected");
+    for f in new_fragments {
+        assert!(
+            f.get("content").is_none(),
+            "fragment summary must not echo content: {f}"
+        );
+        assert!(f.get("id").is_some(), "summary keeps id");
+        assert!(f.get("hash").is_some(), "summary keeps hash");
+    }
+}
+
+#[test]
 fn initialize_advertises_2025_06_18_protocol_version() {
     let mut server = SophonServer::new();
     let init = server

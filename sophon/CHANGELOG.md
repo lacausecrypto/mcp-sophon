@@ -3,6 +3,53 @@
 All notable changes to Sophon are documented here. Versions follow semantic
 versioning (pre-1.0: minor = features/behaviour changes, patch = fixes).
 
+## [Unreleased]
+
+Compression-power & token-economy pass (see `../audit19-plan.md`). Five
+verified levers from a fresh adversarial audit; every change ships with a
+regression test, full suite green (470+ tests), clippy clean.
+
+Measured effect (N=51 real-repo correctness bench, blind judge, vs the
+v0.6.0 baseline): **prompt** key-fact recall **48.8% → 51.3%** (the parser and
+query-aware-truncation fixes). The sophon−truncate *margin* is statistically
+flat (+20.6 → +19.7, CIs overlap) because the truncation baseline is
+calibrated to Sophon's emitted token count and shifts with it. `output` is
+unchanged on this bench (its samples are uncolored, so the ANSI fix below
+can't show — it is proven separately by a colored-input regression test).
+The envelope/accounting fixes are correctness/honesty improvements a
+recall bench does not capture.
+
+### Changed
+- **`compress_output` strips ANSI/terminal escapes up-front (T1.1).** Real
+  tool output is colored, and the per-filter regexes are anchored
+  (`^test … ok$`), so colored input defeated every filter and
+  `compress_output` degenerated to ~truncation. A single pre-pass unblocks
+  all filters (colored `cargo test` goes from ratio ~0.98 to <0.5). The
+  stripped text is the canonical base for the safety floor too, so the
+  floor no longer spuriously reverts the strip.
+- **`compress_prompt` truncates long sections query-aware (T1.3).** When a
+  section overflows the budget, Sophon now keeps the lines that overlap the
+  query (in original order) instead of a blind prefix, so an answer buried
+  mid/late in a long section survives. Falls back to the prefix cut with no
+  query or no overlap; always clamped to the budget.
+- **`encode_fragments` no longer echoes full fragment content (T0.3).** The
+  response now summarizes newly-registered fragments (id/hash/token_count/
+  category) instead of re-sending the bytes the placeholder just removed —
+  which made the first encode net-negative while `tokens_saved` still
+  claimed a win. Content stays in the store, retrievable via
+  `decode_fragments`.
+
+### Fixed
+- **Parser XML hijack (T1.2).** A single incidental `<tag>…</tag>` in a
+  Markdown prompt used to flip the whole parse to the XML branch, dropping
+  every `##` section (bench prompt-002: 17 tokens emitted of a ~700
+  budget). XML now wins only when it actually structures the prompt (covers
+  ≥50% of it) or when there is no Markdown/numbered alternative.
+- **Delta token accounting (T0.2).** `read_file_delta` counted its cost on
+  the Rust `{:?}` Debug form, not the JSON actually sent on the wire — a
+  different string whose token count diverges from reality (and can push a
+  delta past the real budget). It now counts the serialized JSON.
+
 ## [0.6.0] — 2026-06-19
 
 Audit-driven correctness, security and robustness pass (see `../audit18.md`).

@@ -238,7 +238,11 @@ pub fn compress_prompt(
                 } else {
                     0
                 };
-                truncate_section(s, config.max_tokens.saturating_sub(header))
+                truncate_section(
+                    s,
+                    config.max_tokens.saturating_sub(header),
+                    &analysis.query_terms,
+                )
             })
         } else {
             None
@@ -538,18 +542,22 @@ fn lexical_section_scores(
 }
 
 /// Clone a section with its content truncated to roughly `max_tokens` tokens.
-/// Uses a char-proportional cut since re-tokenizing per cut would be slow;
-/// errs on the side of *under* the budget.
-fn truncate_section(section: &PromptSection, max_tokens: usize) -> PromptSection {
+///
+/// When query terms are available, this keeps the lines that actually
+/// overlap the query (in original order) instead of a blind prefix — so an
+/// answer buried in the middle/end of a long section survives the cut
+/// (bench prompt-011 lost exactly this way). With no query terms or no
+/// overlap it falls back to the char-proportional prefix cut.
+fn truncate_section(
+    section: &PromptSection,
+    max_tokens: usize,
+    query_terms: &[String],
+) -> PromptSection {
     if max_tokens == 0 || section.token_count <= max_tokens {
         return section.clone();
     }
-    let ratio = max_tokens as f64 / section.token_count as f64;
-    let mut cut = ((section.content.chars().count() as f64) * ratio * 0.9) as usize;
-    if cut == 0 {
-        cut = 1;
-    }
-    let content: String = section.content.chars().take(cut).collect();
+    let content = query_aware_truncate(&section.content, max_tokens, query_terms)
+        .unwrap_or_else(|| prefix_truncate(&section.content, section.token_count, max_tokens));
     let token_count = count_tokens(&content);
     PromptSection {
         id: section.id.clone(),
@@ -559,6 +567,93 @@ fn truncate_section(section: &PromptSection, max_tokens: usize) -> PromptSection
         topics: section.topics.clone(),
         priority: section.priority,
         dependencies: section.dependencies.clone(),
+    }
+}
+
+/// Char-proportional prefix cut. Errs on the side of *under* the budget
+/// (the `* 0.9`) since re-tokenizing per cut would be slow.
+fn prefix_truncate(content: &str, section_tokens: usize, max_tokens: usize) -> String {
+    let ratio = max_tokens as f64 / section_tokens.max(1) as f64;
+    let mut cut = ((content.chars().count() as f64) * ratio * 0.9) as usize;
+    if cut == 0 {
+        cut = 1;
+    }
+    content.chars().take(cut).collect()
+}
+
+/// Keep the highest query-overlap lines of `content` (in original order)
+/// up to `max_tokens`. Returns `None` when there is nothing better than a
+/// prefix cut to do: no query terms, a single line, or no line overlaps
+/// the query at all. Always keeps at least the single best line, then
+/// fills the remaining budget with the next-best lines; the result is
+/// clamped with a prefix cut so a giant best-line can't overshoot.
+fn query_aware_truncate(
+    content: &str,
+    max_tokens: usize,
+    query_terms: &[String],
+) -> Option<String> {
+    if query_terms.is_empty() {
+        return None;
+    }
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.len() <= 1 {
+        return None;
+    }
+    let q: Vec<String> = query_terms
+        .iter()
+        .map(|t| t.to_lowercase())
+        .filter(|t| !t.is_empty())
+        .collect();
+
+    // Distinct query-term hits per line.
+    let hits: Vec<usize> = lines
+        .iter()
+        .map(|line| {
+            let lower = line.to_lowercase();
+            q.iter().filter(|t| lower.contains(t.as_str())).count()
+        })
+        .collect();
+    if !hits.iter().any(|h| *h > 0) {
+        return None;
+    }
+
+    // Visit lines best-overlap first (ties → original order); always keep
+    // the top line even if it alone exceeds budget (clamped afterwards),
+    // then add further lines only while they fit.
+    let mut order: Vec<usize> = (0..lines.len()).collect();
+    order.sort_by(|&a, &b| hits[b].cmp(&hits[a]).then(a.cmp(&b)));
+
+    let mut keep = vec![false; lines.len()];
+    let mut used = 0usize;
+    for idx in order {
+        let cost = count_tokens(lines[idx]) + 1; // ~newline
+        if used > 0 && used + cost > max_tokens {
+            continue; // a smaller later line may still fit
+        }
+        keep[idx] = true;
+        used += cost;
+        if used >= max_tokens {
+            break;
+        }
+    }
+
+    let kept: String = lines
+        .iter()
+        .zip(&keep)
+        .filter(|(_, k)| **k)
+        .map(|(l, _)| *l)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if kept.is_empty() {
+        return None;
+    }
+
+    // Clamp: a single oversized best-line must not blow the budget.
+    let kept_tokens = count_tokens(&kept);
+    if kept_tokens > max_tokens {
+        Some(prefix_truncate(&kept, kept_tokens, max_tokens))
+    } else {
+        Some(kept)
     }
 }
 
@@ -600,4 +695,75 @@ fn reconstruct_prompt(selected: &[&PromptSection], include_headers: bool) -> Str
         }
     }
     output.trim().to_string()
+}
+
+#[cfg(test)]
+mod truncate_tests {
+    use super::*;
+
+    fn section(content: &str) -> PromptSection {
+        PromptSection {
+            id: "s".into(),
+            name: "s".into(),
+            token_count: count_tokens(content),
+            content: content.into(),
+            topics: vec![],
+            priority: 1,
+            dependencies: vec![],
+        }
+    }
+
+    #[test]
+    fn query_aware_keeps_relevant_line_over_prefix() {
+        // The answer sits at the END of a long section full of irrelevant
+        // preamble. A blind prefix cut would drop it; query-aware must keep it.
+        let mut content = String::new();
+        for i in 0..40 {
+            content.push_str(&format!("preamble filler line number {i} about nothing\n"));
+        }
+        content.push_str("the release binary size is 5.2 MB\n");
+        let sec = section(&content);
+        let budget = sec.token_count / 4;
+
+        let query: Vec<String> = ["binary", "size", "release"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let out = truncate_section(&sec, budget, &query);
+
+        assert!(
+            out.content.contains("5.2 MB"),
+            "query-aware truncation must keep the answer line, got:\n{}",
+            out.content
+        );
+        assert!(out.token_count <= budget, "must respect the budget");
+    }
+
+    #[test]
+    fn falls_back_to_prefix_without_query() {
+        let content = (0..30)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let sec = section(&content);
+        let budget = sec.token_count / 4;
+        let out = truncate_section(&sec, budget, &[]);
+        // No query → prefix behaviour: starts at the beginning.
+        assert!(out.content.starts_with("line 0"));
+        assert!(out.token_count <= budget);
+    }
+
+    #[test]
+    fn no_overlap_falls_back_to_prefix() {
+        let content = (0..30)
+            .map(|i| format!("alpha beta gamma {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let sec = section(&content);
+        let budget = sec.token_count / 4;
+        let query = vec!["zzzznomatch".to_string()];
+        let out = truncate_section(&sec, budget, &query);
+        assert!(out.content.starts_with("alpha beta gamma 0"));
+        assert!(out.token_count <= budget);
+    }
 }

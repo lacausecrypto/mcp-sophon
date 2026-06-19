@@ -409,10 +409,32 @@ pub fn handle_tool_call(
                 count_tokens(&encoded.content),
             );
 
+            // Return only a lightweight summary of newly-registered
+            // fragments (id / hash / token_count / category) — NOT the full
+            // Fragment with its `content` echoed back. Echoing the content
+            // re-sends in the response the very bytes the placeholder just
+            // removed from `content`, making the first encode net-negative
+            // (a 340-char doc came back as a 725-char response while
+            // `tokens_saved` still claimed a win). The content lives in the
+            // store and is retrievable via `decode_fragments`; the realized
+            // saving accrues on every subsequent reuse of the fragment.
+            let new_fragments: Vec<serde_json::Value> = encoded
+                .new_fragments
+                .iter()
+                .map(|f| {
+                    json!({
+                        "id": f.id,
+                        "hash": f.hash,
+                        "token_count": f.token_count,
+                        "category": f.category,
+                    })
+                })
+                .collect();
+
             Ok(json!({
                 "content": encoded.content,
                 "used_fragments": encoded.used_fragments,
-                "new_fragments": encoded.new_fragments,
+                "new_fragments": new_fragments,
                 "token_count": encoded.token_count,
                 "tokens_saved": encoded.tokens_saved,
             }))

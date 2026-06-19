@@ -49,11 +49,23 @@ pub fn parse_prompt(prompt: &str) -> Result<ParsedPrompt, ParseError> {
         return Err(ParseError::EmptyPrompt);
     }
 
-    let raw_sections = if contains_xml_sections(prompt) {
+    let has_markdown = MARKDOWN_HEADER_RE.is_match(prompt);
+    let has_numbered = NUMBERED_RE.is_match(prompt);
+    // The XML branch is greedy: a single incidental `<rust>?:</rust>` in a
+    // Markdown README used to hijack the whole parse, extracting those two
+    // inline tags and silently dropping every `##` section (bench
+    // prompt-002: 17 tokens emitted of a ~700 budget). Only let XML win when
+    // it actually structures the prompt — it covers a real fraction of the
+    // text — OR when there is no Markdown/numbered alternative to fall back
+    // to (so genuinely XML-only prompts are unaffected).
+    let use_xml = contains_xml_sections(prompt)
+        && (xml_is_dominant(prompt) || (!has_markdown && !has_numbered));
+
+    let raw_sections = if use_xml {
         parse_xml_sections(prompt)
-    } else if MARKDOWN_HEADER_RE.is_match(prompt) {
+    } else if has_markdown {
         parse_markdown_sections(prompt)
-    } else if NUMBERED_RE.is_match(prompt) {
+    } else if has_numbered {
         parse_numbered_sections(prompt)
     } else if RULE_RE.is_match(prompt) {
         parse_rule_sections(prompt)
@@ -107,6 +119,26 @@ pub fn parse_prompt(prompt: &str) -> Result<ParsedPrompt, ParseError> {
 
 fn contains_xml_sections(prompt: &str) -> bool {
     XML_SECTION_RE.is_match(prompt)
+}
+
+/// Whether `<tag>…</tag>` blocks actually structure the prompt, rather
+/// than being a couple of incidental inline tags inside prose/Markdown.
+/// Measured as the fraction of the (trimmed) prompt covered by
+/// well-formed XML section spans; ≥ 50 % means XML is the real format.
+fn xml_is_dominant(prompt: &str) -> bool {
+    let total = prompt.trim().len();
+    if total == 0 {
+        return false;
+    }
+    let covered: usize = XML_SECTION_RE
+        .captures_iter(prompt)
+        .filter(|cap| {
+            // Only count balanced tags (open name == close name).
+            cap.get(1).map(|m| m.as_str()) == cap.get(3).map(|m| m.as_str())
+        })
+        .filter_map(|cap| cap.get(0).map(|m| m.len()))
+        .sum();
+    (covered as f32 / total as f32) >= 0.5
 }
 
 fn parse_xml_sections(prompt: &str) -> Vec<(String, String)> {

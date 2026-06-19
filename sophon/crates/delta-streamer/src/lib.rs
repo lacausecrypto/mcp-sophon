@@ -149,7 +149,7 @@ impl DeltaStreamer {
                 };
                 self.state.insert(new_state.clone());
 
-                let delta_tokens = count_tokens(&format!("{:?}", operations));
+                let delta_tokens = crate::differ::delta_token_cost(&operations);
                 return Ok(FileReadResponse::Delta {
                     base_version: existing.version,
                     new_version: new_state.version,

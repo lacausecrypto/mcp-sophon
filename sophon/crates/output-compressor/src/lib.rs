@@ -12,6 +12,7 @@
 //!
 //! Entry point: [`OutputCompressor::compress`].
 
+pub mod ansi;
 pub mod dedup;
 pub mod detector;
 pub mod filters;

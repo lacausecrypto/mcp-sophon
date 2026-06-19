@@ -11,27 +11,27 @@
       "savings": 0.0
     },
     "sophon": {
-      "recall": 0.4228291316526611,
-      "savings": 0.6318955610839856
+      "recall": 0.43440709617180207,
+      "savings": 0.6269253822863676
     },
     "truncate": {
-      "recall": 0.21647992530345472,
-      "savings": 0.6362224600775169
+      "recall": 0.2373949579831933,
+      "savings": 0.631855935814193
     }
   },
   "delta_sophon_minus_truncate": {
-    "mean": 0.20634920634920634,
+    "mean": 0.19701213818860877,
     "ci95": [
-      0.13060224089635855,
-      0.2890989729225023
+      0.10695611577964517,
+      0.29110644257703083
     ],
     "n": 51
   },
   "delta_sophon_minus_oracle": {
-    "mean": -0.2641923436041083,
+    "mean": -0.2526143790849673,
     "ci95": [
-      -0.3553688141923436,
-      -0.17324929971988792
+      -0.34147992530345467,
+      -0.1664799253034547
     ],
     "n": 51
   },
@@ -73,13 +73,13 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 17,
-          "recall": 0.0,
+          "tokens": 683,
+          "recall": 0.6666666666666666,
           "judged": true
         },
         "truncate": {
-          "tokens": 14,
-          "recall": 0.0,
+          "tokens": 665,
+          "recall": 0.6666666666666666,
           "judged": true
         }
       }
@@ -313,12 +313,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 776,
-          "recall": 0.2857142857142857,
+          "tokens": 748,
+          "recall": 0.14285714285714285,
           "judged": true
         },
         "truncate": {
-          "tokens": 771,
+          "tokens": 730,
           "recall": 0.2857142857142857,
           "judged": true
         }
@@ -337,12 +337,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 617,
+          "tokens": 602,
           "recall": 0.6,
           "judged": true
         },
         "truncate": {
-          "tokens": 609,
+          "tokens": 598,
           "recall": 0.6,
           "judged": true
         }
@@ -361,12 +361,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 772,
-          "recall": 0.0,
+          "tokens": 702,
+          "recall": 0.2,
           "judged": true
         },
         "truncate": {
-          "tokens": 770,
+          "tokens": 676,
           "recall": 0.0,
           "judged": true
         }
@@ -385,13 +385,13 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 397,
-          "recall": 0.8333333333333334,
+          "tokens": 335,
+          "recall": 0.16666666666666666,
           "judged": true
         },
         "truncate": {
-          "tokens": 397,
-          "recall": 0.6666666666666666,
+          "tokens": 335,
+          "recall": 0.3333333333333333,
           "judged": true
         }
       }
@@ -409,12 +409,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 212,
-          "recall": 1.0,
+          "tokens": 229,
+          "recall": 0.5,
           "judged": true
         },
         "truncate": {
-          "tokens": 192,
+          "tokens": 210,
           "recall": 1.0,
           "judged": true
         }
@@ -433,12 +433,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 484,
+          "tokens": 474,
           "recall": 0.0,
           "judged": true
         },
         "truncate": {
-          "tokens": 484,
+          "tokens": 474,
           "recall": 0.0,
           "judged": true
         }
@@ -457,12 +457,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 528,
-          "recall": 0.0,
+          "tokens": 568,
+          "recall": 0.16666666666666666,
           "judged": true
         },
         "truncate": {
-          "tokens": 505,
+          "tokens": 528,
           "recall": 0.0,
           "judged": true
         }
@@ -481,13 +481,13 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 746,
-          "recall": 0.5,
+          "tokens": 755,
+          "recall": 0.3333333333333333,
           "judged": true
         },
         "truncate": {
-          "tokens": 745,
-          "recall": 0.5,
+          "tokens": 755,
+          "recall": 0.8333333333333334,
           "judged": true
         }
       }
@@ -505,12 +505,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 243,
-          "recall": 0.5,
+          "tokens": 229,
+          "recall": 0.3333333333333333,
           "judged": true
         },
         "truncate": {
-          "tokens": 242,
+          "tokens": 228,
           "recall": 0.5,
           "judged": true
         }
@@ -529,12 +529,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 369,
-          "recall": 0.0,
+          "tokens": 361,
+          "recall": 0.6666666666666666,
           "judged": true
         },
         "truncate": {
-          "tokens": 369,
+          "tokens": 359,
           "recall": 0.0,
           "judged": true
         }
@@ -553,13 +553,13 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 424,
-          "recall": 0.0,
+          "tokens": 456,
+          "recall": 0.2,
           "judged": true
         },
         "truncate": {
-          "tokens": 421,
-          "recall": 0.0,
+          "tokens": 452,
+          "recall": 0.4,
           "judged": true
         }
       }
@@ -577,12 +577,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 589,
+          "tokens": 588,
           "recall": 0.625,
           "judged": true
         },
         "truncate": {
-          "tokens": 588,
+          "tokens": 587,
           "recall": 0.625,
           "judged": true
         }
@@ -601,12 +601,12 @@
           "judged": true
         },
         "sophon": {
-          "tokens": 872,
-          "recall": 0.0,
+          "tokens": 884,
+          "recall": 0.3333333333333333,
           "judged": true
         },
         "truncate": {
-          "tokens": 871,
+          "tokens": 883,
           "recall": 0.0,
           "judged": true
         }

@@ -120,9 +120,25 @@ pub struct CompressionResult {
 /// resulting `CompressionResult`. Defensive: if a strategy has a bug it
 /// leaves the text unchanged rather than crashing the whole compress.
 pub fn run_pipeline(command: &str, output: &str, filter: &FilterConfig) -> CompressionResult {
+    // `original_tokens` is measured on the *raw* output so the ratio
+    // credits the escape-byte removal as a real saving.
     let original_tokens = count_tokens(output);
-    let mut current: Cow<str> = Cow::Borrowed(output);
+
+    // Strip ANSI/terminal escapes once, up-front. Real tool output is
+    // colored, and the per-filter regexes are anchored (`^test … ok$`),
+    // so without this every filter degenerates into a no-op on colored
+    // input and compress_output collapses to ~truncation. The stripped
+    // text becomes the canonical base for both the strategy pipeline and
+    // the safety-floor baseline below, so the floor compares like with
+    // like (stripped vs stripped) instead of spuriously reverting the
+    // strip on filters that have a floor.
+    let stripped = crate::ansi::strip_ansi(output);
     let mut strategies_applied = Vec::new();
+    if matches!(stripped, Cow::Owned(_)) {
+        strategies_applied.push("strip_ansi".to_string());
+    }
+    let base = stripped.into_owned();
+    let mut current: Cow<str> = Cow::Borrowed(&base);
 
     for strategy in &filter.strategies {
         let before_len = current.len();
@@ -189,7 +205,12 @@ pub fn run_pipeline(command: &str, output: &str, filter: &FilterConfig) -> Compr
     // so the original lines won't appear verbatim — comparing line
     // coverage there would wrongly discard a genuine structural win.
     if filter_has_safety_floor(filter.name) && !json_already_compressed && compressed_tokens > 0 {
-        let baseline = truncate::head_truncate_tokens(output, compressed_tokens.max(1));
+        // Baseline is the ANSI-stripped text (`base`), not the raw
+        // `output`: comparing stripped-compressed lines against raw
+        // ANSI-laden lines would never match and would wrongly revert
+        // the strip. Truncation of the stripped text is the correct
+        // "never do worse than truncation" floor.
+        let baseline = truncate::head_truncate_tokens(&base, compressed_tokens.max(1));
         // Fall back to truncation when it preserves any line the
         // compression dropped. A pure *count* of preserved lines is not
         // enough: grep's GroupBy can keep the same NUMBER of lines while

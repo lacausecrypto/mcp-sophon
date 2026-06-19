@@ -95,9 +95,21 @@ pub fn generate_diff(old: &str, new: &str) -> Vec<DiffOperation> {
     ops
 }
 
+/// Token cost of a delta as the LLM actually sees it: the operations are
+/// serialized to JSON on the wire (`handlers.rs` → `serde_json::to_value`),
+/// not as Rust `{:?}`. Counting the Debug form undercounts by ~15-20 %
+/// (JSON quoting/escaping) and inflates `savings_percent`, which can push
+/// a delta past the real token budget. Fall back to Debug only if JSON
+/// serialization somehow fails (it cannot for these types).
+pub fn delta_token_cost(operations: &[DiffOperation]) -> usize {
+    let serialized =
+        serde_json::to_string(operations).unwrap_or_else(|_| format!("{operations:?}"));
+    count_tokens(&serialized)
+}
+
 pub fn calculate_savings(_old: &str, new: &str, diff: &[DiffOperation]) -> DiffStats {
     let full_tokens = count_tokens(new);
-    let diff_tokens = count_tokens(&format!("{:?}", diff));
+    let diff_tokens = delta_token_cost(diff);
 
     let savings_percent = if full_tokens == 0 {
         0.0
@@ -114,4 +126,33 @@ pub fn calculate_savings(_old: &str, new: &str, diff: &[DiffOperation]) -> DiffS
 
 fn to_lines(content: &str) -> Vec<String> {
     content.lines().map(|line| line.to_string()).collect()
+}
+
+#[cfg(test)]
+mod cost_tests {
+    use super::*;
+    use sophon_core::tokens::count_tokens;
+
+    #[test]
+    fn delta_cost_counts_real_json_not_debug() {
+        // A delta whose new_lines contain quote/backslash chars — exactly
+        // where JSON escaping diverges from Rust Debug.
+        let ops = vec![DiffOperation::Replace {
+            start: 1,
+            delete_count: 1,
+            new_lines: vec![r#"println!("a\tb");"#.to_string(), "next".to_string()],
+        }];
+
+        // delta_token_cost must equal the cost of what is actually sent on
+        // the wire (JSON). The Debug form is a *different* string whose
+        // token count diverges from reality in either direction (here it
+        // happens to be larger) — so we lock to the JSON cost, not Debug.
+        let json_cost = count_tokens(&serde_json::to_string(&ops).unwrap());
+        let debug_cost = count_tokens(&format!("{ops:?}"));
+        assert_eq!(delta_token_cost(&ops), json_cost);
+        assert_ne!(
+            json_cost, debug_cost,
+            "this fixture is meant to exercise a JSON≠Debug divergence"
+        );
+    }
 }
