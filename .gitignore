@@ -60,5 +60,9 @@ benchmarks/*.json
 !benchmarks/*.py
 !benchmarks/*.md
 
+# Correctness bench — transient LLM-response cache + run logs (keep reports + correctness*.json)
+benchmarks/correctness/results/cache/
+benchmarks/correctness/results/logs/
+
 # MCP registry auth tokens — NEVER commit, they grant publish rights
 .mcpregistry_*

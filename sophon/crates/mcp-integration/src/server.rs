@@ -131,7 +131,39 @@ impl SophonServer {
                             }
                         }
                     }
-                    _ => Retriever::open(rcfg),
+                    // An ML embedder was explicitly requested but is not
+                    // compiled into this binary. Fall back to the
+                    // deterministic HashEmbedder, but say so LOUDLY — the
+                    // old code fell through silently, so callers believed
+                    // they were getting semantic retrieval when they were
+                    // not (audit F5/F6).
+                    #[cfg(not(feature = "bge"))]
+                    "bge" => {
+                        tracing::warn!(
+                            "SOPHON_EMBEDDER=bge requested but this binary was built WITHOUT \
+                             the `bge` feature — falling back to the deterministic HashEmbedder \
+                             (lexical, NOT semantic). Rebuild with `cargo build --features bge` \
+                             for genuine semantic embeddings."
+                        );
+                        Retriever::open(rcfg)
+                    }
+                    "bert" => {
+                        tracing::warn!(
+                            "SOPHON_EMBEDDER=bert is not a wired embedder — the bert backend is \
+                             an unfinished stub and is never selected. Falling back to the \
+                             deterministic HashEmbedder (lexical, NOT semantic). Use \
+                             `--features bge` for semantic embeddings."
+                        );
+                        Retriever::open(rcfg)
+                    }
+                    "" | "hash" => Retriever::open(rcfg),
+                    other => {
+                        tracing::warn!(
+                            embedder = %other,
+                            "unknown SOPHON_EMBEDDER value — using the deterministic HashEmbedder"
+                        );
+                        Retriever::open(rcfg)
+                    }
                 };
 
                 match result {
@@ -182,7 +214,7 @@ impl SophonServer {
         Self {
             prompt_compressor: PromptCompressor::with_config(cfg.prompt),
             memory_manager,
-            delta_streamer: DeltaStreamer::new(cfg.delta.max_files),
+            delta_streamer: build_delta_streamer(cfg.delta.max_files),
             fragment_cache: FragmentCache::with_config(cfg.fragment),
             output_compressor: OutputCompressor::default(),
             codebase_navigator: Navigator::new(NavigatorConfig::default()),
@@ -626,6 +658,47 @@ pub struct ModuleStats {
     pub calls: u64,
     pub original_tokens: u64,
     pub compressed_tokens: u64,
+}
+
+/// Build the delta streamer with filesystem confinement enabled (F1).
+///
+/// The root is `SOPHON_FS_ROOT` if set, otherwise the current working
+/// directory — an MCP server for a coding agent operates within its
+/// project, so confining there blocks prompt-injected traversal
+/// (`../../.ssh/id_rsa`) out of the box while leaving normal in-project
+/// edits untouched. If the root can't be resolved (e.g. CWD was deleted),
+/// we log and fall back to an unconfined streamer rather than crash
+/// startup — the same fail-soft posture as the other optional subsystems.
+fn build_delta_streamer(max_files: usize) -> DeltaStreamer {
+    let root = std::env::var("SOPHON_FS_ROOT")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(|s| expand_tilde(&s))
+        .or_else(|| std::env::current_dir().ok());
+
+    let streamer = DeltaStreamer::new(max_files);
+    match root {
+        Some(root) => match streamer.with_fs_root(&root) {
+            Ok(confined) => {
+                tracing::info!(root = ?root, "delta file operations confined to root");
+                confined
+            }
+            Err(e) => {
+                tracing::warn!(
+                    root = ?root,
+                    error = %e,
+                    "could not confine delta file operations; running UNCONFINED"
+                );
+                DeltaStreamer::new(max_files)
+            }
+        },
+        None => {
+            tracing::warn!(
+                "no SOPHON_FS_ROOT and no current dir; delta file operations run UNCONFINED"
+            );
+            streamer
+        }
+    }
 }
 
 fn expand_tilde(path: &str) -> std::path::PathBuf {

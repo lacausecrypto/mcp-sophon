@@ -98,7 +98,12 @@ mod tests {
     }
 
     #[test]
-    fn grep_groups_by_file() {
+    fn grep_never_below_truncation() {
+        // grep output is list-like: every `file:line: match` row is signal.
+        // The GroupBy heuristic would collapse same-file matches into a
+        // bare `file: N matches` count — which destroys the matches the
+        // caller grepped for. The F4 safety floor guarantees we never end
+        // up below a plain truncation: the verbatim matches survive.
         let input = r#"src/main.rs:10:fn main()
 src/main.rs:20:    println!()
 src/main.rs:30:    exit(0)
@@ -108,14 +113,60 @@ src/lib.rs:5:pub fn api()
 src/lib.rs:10:}"#;
         let f = grep_filter();
         let r = run_pipeline("grep -rn foo", input, &f);
-        // src/main.rs has 5 matches ≥ min_count=5 → grouped
+
+        let baseline = crate::truncate::head_truncate_tokens(input, r.compressed_tokens.max(1));
+        let comp_cov = crate::truncate::unique_line_coverage(input, &r.compressed);
+        let base_cov = crate::truncate::unique_line_coverage(input, &baseline);
+        // The guarantee holds regardless of whether grouping or the floor
+        // produced the output: never fewer matches than truncation. (On a
+        // small output like this, grouping ties truncation and is kept; on
+        // a large multi-file grep the floor engages — see
+        // `grep_safety_floor_preserves_matches`.)
         assert!(
-            r.compressed.contains("src/main.rs: 5 matches"),
-            "expected grouping: {}",
+            comp_cov >= base_cov,
+            "grep must not preserve fewer matches ({comp_cov}) than truncation ({base_cov})"
+        );
+    }
+
+    // F4 (bench output-050): grep over many matches in one file used to
+    // collapse them to `file: N matches`, destroying the verbatim match
+    // text that the caller actually grepped for — 0% recall where plain
+    // truncation got 100%. The safety floor must keep us ≥ truncation.
+    #[test]
+    fn grep_safety_floor_preserves_matches() {
+        // Many `pub fn` matches across several files — over min_count, so
+        // GroupBy is tempted to collapse them into useless count lines.
+        let input = (0..8)
+            .flat_map(|file| {
+                (0..6).map(move |i| {
+                    format!(
+                        "src/mod_{file}.rs:{}:pub fn handler_{file}_{i}(req: Req) -> Resp",
+                        i * 3
+                    )
+                })
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let f = grep_filter();
+        let r = run_pipeline("grep -rn 'pub fn' src", &input, &f);
+
+        let baseline = crate::truncate::head_truncate_tokens(&input, r.compressed_tokens.max(1));
+        let comp_cov = crate::truncate::unique_line_coverage(&input, &r.compressed);
+        let base_cov = crate::truncate::unique_line_coverage(&input, &baseline);
+        assert!(
+            comp_cov >= base_cov,
+            "grep must not preserve fewer matches ({comp_cov}) than truncation ({base_cov}); \
+             got: {}",
             r.compressed
         );
-        // src/lib.rs has 2 matches < min_count → kept verbatim
-        assert!(r.compressed.contains("src/lib.rs:5:"));
+        // And concretely: a real signature survives verbatim, not just a
+        // `N matches` summary.
+        assert!(
+            r.compressed.contains("pub fn handler_0_0("),
+            "verbatim match lost: {}",
+            r.compressed
+        );
+        assert!(!r.compressed.contains(" matches"));
     }
 
     #[test]

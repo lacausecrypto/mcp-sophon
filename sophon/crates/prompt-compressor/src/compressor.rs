@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use sophon_core::tokens::count_tokens;
 
 use crate::{
-    analyzer::{Complexity, QueryAnalysis},
+    analyzer::{tokenize_terms, QueryAnalysis},
     parser::{ParsedPrompt, PromptSection},
 };
 
@@ -13,6 +13,20 @@ use crate::{
 /// ("weather" ↔ "rust errors") stays below (~0.2–0.4).
 const SEMANTIC_INCLUDE_THRESHOLD: f32 = 0.55;
 
+/// Minimum *normalized* BM25 lexical score (0.0–1.0, top section = 1.0)
+/// for a section to be auto-included by the default lexical scorer. This
+/// is the query-aware default that replaces relying solely on the frozen
+/// topic-keyword dictionary: a section sharing a meaningful (high-IDF)
+/// query term — e.g. a function name the dictionary never heard of — is
+/// pulled in even with no topic match.
+const LEXICAL_INCLUDE_THRESHOLD: f32 = 0.3;
+
+/// BM25 term-frequency saturation and length-normalization constants.
+/// Standard Robertson/Sparck-Jones defaults; the "corpus" here is the
+/// set of sections in the single prompt being compressed.
+const BM25_K1: f32 = 1.5;
+const BM25_B: f32 = 0.75;
+
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(default)]
 pub struct CompressionConfig {
@@ -20,6 +34,15 @@ pub struct CompressionConfig {
     pub min_tokens: usize,
     pub include_headers: bool,
     pub topic_mappings: HashMap<String, Vec<String>>,
+    /// Fraction of `max_tokens` the compressor tries to fill when the
+    /// relevance-selected sections leave budget unused. Filling spare
+    /// budget with the next-most-relevant sections strictly increases
+    /// recall at zero token cost (we are already under budget) and kills
+    /// the catastrophic under-fill the bench surfaced — "9 tokens emitted
+    /// of ~700 allowed". Naive truncation always fills 100% of the
+    /// budget; under-filling is pure loss against it. Set to 0.0 to
+    /// disable backfill and keep pure relevance selection.
+    pub backfill_ratio: f32,
 }
 
 impl Default for CompressionConfig {
@@ -29,6 +52,7 @@ impl Default for CompressionConfig {
             min_tokens: 0,
             include_headers: true,
             topic_mappings: default_topic_mappings(),
+            backfill_ratio: 0.9,
         }
     }
 }
@@ -125,6 +149,22 @@ pub fn compress_prompt(
         }
     }
 
+    // Lexical section scoring (default, no embedder required). BM25 over
+    // the prompt's own sections using the *raw* query terms, not the
+    // frozen topic dictionary — this is the query-aware default that
+    // catches domain-specific identifiers the keyword dictionary misses.
+    // Sections above the threshold are pulled in and marked topic_matched
+    // so they survive budget trimming.
+    let lexical_scores = lexical_section_scores(&analysis.query_terms, &parsed.sections);
+    for section in &parsed.sections {
+        if let Some(&score) = lexical_scores.get(&section.id) {
+            if score >= LEXICAL_INCLUDE_THRESHOLD {
+                included.insert(section.id.clone());
+                topic_matched.insert(section.id.clone());
+            }
+        }
+    }
+
     // Semantic section scoring — when an embedder provides cosine
     // similarity scores, include sections above the threshold even if
     // no keyword matched. This is the "loop ≈ iteration" fix.
@@ -147,16 +187,34 @@ pub fn compress_prompt(
             selected.push(section);
         }
     }
-    trim_to_budget(&mut selected, config.max_tokens, &topic_matched);
+    trim_to_budget(
+        &mut selected,
+        config.max_tokens,
+        &topic_matched,
+        config.include_headers,
+        &lexical_scores,
+    );
 
+    // Fill spare budget with the next-most-relevant sections. The target
+    // is `backfill_ratio × max_tokens` (but never below an explicit
+    // `min_tokens` floor, and never above the hard ceiling). Ordering is
+    // by descending lexical relevance, then core-first, then document
+    // order — so the budget is spent on the best remaining content. This
+    // is what stops Sophon from emitting a tiny fraction of an ample
+    // budget and losing to naive truncation.
     let effective_min_tokens = config.min_tokens.min(config.max_tokens);
-    if count_selected_tokens(&selected) < effective_min_tokens {
-        backfill_to_minimum(parsed, &mut selected, effective_min_tokens);
-    }
-
-    // Complexity scaling
-    if matches!(analysis.complexity, Complexity::Simple) {
-        keep_top_n_non_core(parsed, &mut selected, 2);
+    let backfill_target = ((config.max_tokens as f32 * config.backfill_ratio) as usize)
+        .max(effective_min_tokens)
+        .min(config.max_tokens);
+    if count_selected_cost(&selected, config.include_headers) < backfill_target {
+        backfill_to_budget(
+            parsed,
+            &mut selected,
+            backfill_target,
+            config.max_tokens,
+            config.include_headers,
+            &lexical_scores,
+        );
     }
 
     // Enforce the token budget even when every remaining section is core
@@ -164,7 +222,7 @@ pub fn compress_prompt(
     // giant core section (common for plain-text prompts) can overflow. In that
     // case, truncate the largest remaining section to fit.
     let owned_truncated: Option<PromptSection> = {
-        let over = count_selected_tokens(&selected) > config.max_tokens;
+        let over = count_selected_cost(&selected, config.include_headers) > config.max_tokens;
         let empty_fallback = selected.is_empty();
         if over || empty_fallback {
             let source = if empty_fallback {
@@ -172,7 +230,16 @@ pub fn compress_prompt(
             } else {
                 selected.iter().max_by_key(|s| s.token_count).copied()
             };
-            source.map(|s| truncate_section(s, config.max_tokens))
+            // Leave room for this section's header so the reconstructed
+            // output (which wraps content in <name>…</name>) still fits.
+            source.map(|s| {
+                let header = if config.include_headers {
+                    header_overhead(&s.name)
+                } else {
+                    0
+                };
+                truncate_section(s, config.max_tokens.saturating_sub(header))
+            })
         } else {
             None
         }
@@ -276,8 +343,10 @@ fn trim_to_budget(
     selected: &mut Vec<&PromptSection>,
     max_tokens: usize,
     topic_matched: &HashSet<String>,
+    include_headers: bool,
+    lexical_scores: &HashMap<String, f32>,
 ) {
-    if count_selected_tokens(selected) <= max_tokens {
+    if count_selected_cost(selected, include_headers) <= max_tokens {
         return;
     }
 
@@ -289,7 +358,7 @@ fn trim_to_budget(
 
     // First pass: drop non-topic-matched sections with priority > 0 (largest first).
     // These are the "generic" sections that have nothing to do with the query.
-    while count_selected_tokens(selected) > max_tokens {
+    while count_selected_cost(selected, include_headers) > max_tokens {
         let idx = selected
             .iter()
             .enumerate()
@@ -303,16 +372,29 @@ fn trim_to_budget(
         }
     }
 
-    // Second pass: only if still over budget, start removing topic-matched sections
-    // (lowest-priority / largest first). This preserves at least some topic signal
-    // but respects the hard max_tokens ceiling.
-    while count_selected_tokens(selected) > max_tokens {
-        let idx = selected
+    // Second pass: only if still over budget, start removing topic-matched
+    // sections — but drop the *least relevant* first (lowest lexical score),
+    // so a small generic dictionary match yields before the large section
+    // that actually overlaps the query. Without this, the largest section
+    // goes first, which is often the most relevant one (it has the most
+    // matching terms) — silently undoing the lexical selection under budget
+    // pressure. Tie-break: least important (highest priority number), then
+    // largest token count to free the most budget per removal.
+    while count_selected_cost(selected, include_headers) > max_tokens {
+        let target = selected
             .iter()
             .enumerate()
-            .rfind(|(_, s)| s.priority > 0)
+            .filter(|(_, s)| s.priority > 0)
+            .min_by(|(_, a), (_, b)| {
+                let sa = lexical_scores.get(&a.id).copied().unwrap_or(0.0);
+                let sb = lexical_scores.get(&b.id).copied().unwrap_or(0.0);
+                sa.partial_cmp(&sb)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(a.priority.cmp(&b.priority))
+                    .then(a.token_count.cmp(&b.token_count))
+            })
             .map(|(idx, _)| idx);
-        match idx {
+        match target {
             Some(i) => {
                 selected.remove(i);
             }
@@ -323,61 +405,136 @@ fn trim_to_budget(
     selected.sort_by(|a, b| a.id.cmp(&b.id));
 }
 
-fn backfill_to_minimum<'a>(
+/// Fill spare budget by adding not-yet-selected sections, most-relevant
+/// first, until `target_tokens` is reached. A section is added only when
+/// it still fits under the hard `max_tokens` ceiling; bigger sections are
+/// skipped (not a hard stop) so smaller relevant ones can still top off
+/// the budget. Ordering: descending lexical score, then core-first
+/// (priority ascending), then document order for stable, deterministic
+/// output.
+fn backfill_to_budget<'a>(
     parsed: &'a ParsedPrompt,
     selected: &mut Vec<&'a PromptSection>,
-    min_tokens: usize,
+    target_tokens: usize,
+    max_tokens: usize,
+    include_headers: bool,
+    lexical_scores: &HashMap<String, f32>,
 ) {
-    let mut picked = selected
+    let picked = selected
         .iter()
         .map(|s| s.id.as_str())
         .collect::<HashSet<_>>();
-    let candidates = parsed
+
+    let mut candidates = parsed
         .sections
         .iter()
-        .filter(|s| !picked.contains(s.id.as_str()))
+        .enumerate()
+        .filter(|(_, s)| !picked.contains(s.id.as_str()))
         .collect::<Vec<_>>();
 
-    for section in candidates {
-        selected.push(section);
-        picked.insert(section.id.as_str());
-        if count_selected_tokens(selected) >= min_tokens {
+    candidates.sort_by(|(ia, a), (ib, b)| {
+        let sa = lexical_scores.get(&a.id).copied().unwrap_or(0.0);
+        let sb = lexical_scores.get(&b.id).copied().unwrap_or(0.0);
+        sb.partial_cmp(&sa)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.priority.cmp(&b.priority))
+            .then(ia.cmp(ib))
+    });
+
+    let mut total = count_selected_cost(selected, include_headers);
+    for (_, section) in candidates {
+        if total >= target_tokens {
             break;
+        }
+        let cost = section_cost(section, include_headers);
+        if total + cost <= max_tokens {
+            selected.push(section);
+            total += cost;
         }
     }
 
     selected.sort_by(|a, b| a.id.cmp(&b.id));
 }
 
-fn keep_top_n_non_core<'a>(
-    parsed: &'a ParsedPrompt,
-    selected: &mut Vec<&'a PromptSection>,
-    n: usize,
-) {
-    let core_ids = parsed
-        .core_sections
+/// Score every section against the query with BM25, treating the prompt's
+/// sections as the document corpus. Returns scores normalized so the
+/// best-matching section is 1.0 (empty map when no query term hits any
+/// section). This is the deterministic, ML-free, query-aware relevance
+/// signal used by default — high-IDF rare terms (identifiers, error
+/// names) dominate, which is exactly what the frozen topic dictionary
+/// cannot do.
+fn lexical_section_scores(
+    query_terms: &[String],
+    sections: &[PromptSection],
+) -> HashMap<String, f32> {
+    let mut scores = HashMap::new();
+    if query_terms.is_empty() || sections.is_empty() {
+        return scores;
+    }
+
+    // Distinct query terms — repeats add nothing to a section's BM25 sum.
+    let q_terms: HashSet<&str> = query_terms.iter().map(|s| s.as_str()).collect();
+
+    // Tokenize each section once.
+    let docs: Vec<(&str, Vec<String>)> = sections
         .iter()
-        .map(|s| s.as_str())
-        .collect::<HashSet<_>>();
+        .map(|s| (s.id.as_str(), tokenize_terms(&s.content)))
+        .collect();
 
-    let mut non_core = selected
-        .iter()
-        .filter(|s| !core_ids.contains(s.id.as_str()))
-        .cloned()
-        .collect::<Vec<_>>();
-    non_core.sort_by(|a, b| {
-        a.priority
-            .cmp(&b.priority)
-            .then(a.token_count.cmp(&b.token_count))
-    });
+    let n = docs.len() as f32;
+    let total_len: usize = docs.iter().map(|(_, t)| t.len()).sum();
+    let avgdl = if docs.is_empty() {
+        0.0
+    } else {
+        total_len as f32 / n
+    };
 
-    let keep_non_core = non_core
-        .into_iter()
-        .take(n)
-        .map(|s| s.id.clone())
-        .collect::<HashSet<_>>();
+    // Document frequency per query term.
+    let mut df: HashMap<&str, usize> = HashMap::new();
+    for (_, terms) in &docs {
+        let present: HashSet<&str> = terms.iter().map(|t| t.as_str()).collect();
+        for q in &q_terms {
+            if present.contains(*q) {
+                *df.entry(*q).or_insert(0) += 1;
+            }
+        }
+    }
 
-    selected.retain(|s| core_ids.contains(s.id.as_str()) || keep_non_core.contains(&s.id));
+    for (id, terms) in &docs {
+        let dl = terms.len() as f32;
+        let mut tf: HashMap<&str, usize> = HashMap::new();
+        for t in terms {
+            if q_terms.contains(t.as_str()) {
+                *tf.entry(t.as_str()).or_insert(0) += 1;
+            }
+        }
+
+        let mut score = 0.0f32;
+        for (term, &freq) in &tf {
+            let df_t = *df.get(term).unwrap_or(&0) as f32;
+            // BM25 idf with the standard +1 shift to keep it non-negative.
+            let idf = (((n - df_t + 0.5) / (df_t + 0.5)) + 1.0).ln();
+            let f = freq as f32;
+            let denom = f + BM25_K1 * (1.0 - BM25_B + BM25_B * (dl / avgdl.max(1.0)));
+            score += idf * (f * (BM25_K1 + 1.0)) / denom.max(f32::EPSILON);
+        }
+        if score > 0.0 {
+            scores.insert((*id).to_string(), score);
+        }
+    }
+
+    // Normalize so the top section is 1.0 — lets a single threshold work
+    // regardless of query length or absolute BM25 magnitude.
+    let max = scores.values().copied().fold(0.0f32, f32::max);
+    if max > 0.0 {
+        for v in scores.values_mut() {
+            *v /= max;
+        }
+    } else {
+        scores.clear();
+    }
+
+    scores
 }
 
 /// Clone a section with its content truncated to roughly `max_tokens` tokens.
@@ -405,8 +562,29 @@ fn truncate_section(section: &PromptSection, max_tokens: usize) -> PromptSection
     }
 }
 
-fn count_selected_tokens(selected: &[&PromptSection]) -> usize {
-    selected.iter().map(|s| s.token_count).sum()
+/// Token cost of the `<name>…</name>` wrapper that [`reconstruct_prompt`]
+/// adds around a section when headers are on. Budget math must include
+/// this or the reconstructed output overshoots `max_tokens` by the
+/// per-section header overhead.
+fn header_overhead(name: &str) -> usize {
+    count_tokens(&format!("<{name}>\n</{name}>\n\n"))
+}
+
+/// Effective budget cost of a section in the reconstructed output:
+/// content tokens plus the header wrapper when headers are enabled.
+fn section_cost(section: &PromptSection, include_headers: bool) -> usize {
+    if include_headers {
+        section.token_count + header_overhead(&section.name)
+    } else {
+        section.token_count
+    }
+}
+
+fn count_selected_cost(selected: &[&PromptSection], include_headers: bool) -> usize {
+    selected
+        .iter()
+        .map(|s| section_cost(s, include_headers))
+        .sum()
 }
 
 fn reconstruct_prompt(selected: &[&PromptSection], include_headers: bool) -> String {

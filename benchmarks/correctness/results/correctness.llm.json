@@ -1,0 +1,1264 @@
+{
+  "config": {
+    "ratio": 3,
+    "answer_model": "haiku",
+    "judge_model": "sonnet",
+    "n_tasks": 51
+  },
+  "overall": {
+    "oracle": {
+      "recall": 0.6870214752567695,
+      "savings": 0.0
+    },
+    "sophon": {
+      "recall": 0.22406629318394028,
+      "savings": 0.6717912197916414
+    },
+    "truncate": {
+      "recall": 0.21223155929038284,
+      "savings": 0.6756838724582342
+    }
+  },
+  "delta_sophon_minus_truncate": {
+    "mean": 0.011834733893557423,
+    "ci95": [
+      -0.05966386554621848,
+      0.07894491129785247
+    ],
+    "n": 51
+  },
+  "delta_sophon_minus_oracle": {
+    "mean": -0.46295518207282926,
+    "ci95": [
+      -0.5551587301587303,
+      -0.36921101774042947
+    ],
+    "n": 51
+  },
+  "records": [
+    {
+      "id": "prompt-001",
+      "op": "prompt",
+      "label": "doc:README.md#0",
+      "n_facts": 7,
+      "raw_tokens": 2285,
+      "arms": {
+        "oracle": {
+          "tokens": 2285,
+          "recall": 0.7142857142857143,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 558,
+          "recall": 0.14285714285714285,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 558,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "prompt-002",
+      "op": "prompt",
+      "label": "doc:README.md#1",
+      "n_facts": 6,
+      "raw_tokens": 2101,
+      "arms": {
+        "oracle": {
+          "tokens": 2101,
+          "recall": 0.8333333333333334,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 9,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 8,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "prompt-003",
+      "op": "prompt",
+      "label": "doc:BENCHMARK.md#0",
+      "n_facts": 7,
+      "raw_tokens": 2233,
+      "arms": {
+        "oracle": {
+          "tokens": 2233,
+          "recall": 0.8571428571428571,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 700,
+          "recall": 0.7142857142857143,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 698,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "prompt-004",
+      "op": "prompt",
+      "label": "doc:BENCHMARK.md#1",
+      "n_facts": 7,
+      "raw_tokens": 2205,
+      "arms": {
+        "oracle": {
+          "tokens": 2205,
+          "recall": 1.0,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 690,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 683,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "prompt-005",
+      "op": "prompt",
+      "label": "doc:CHANGELOG.md#0",
+      "n_facts": 6,
+      "raw_tokens": 2263,
+      "arms": {
+        "oracle": {
+          "tokens": 2263,
+          "recall": 0.6666666666666666,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 575,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 549,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "prompt-006",
+      "op": "prompt",
+      "label": "doc:CHANGELOG.md#1",
+      "n_facts": 8,
+      "raw_tokens": 2203,
+      "arms": {
+        "oracle": {
+          "tokens": 2203,
+          "recall": 1.0,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 365,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 365,
+          "recall": 0.625,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "prompt-007",
+      "op": "prompt",
+      "label": "doc:CHANGELOG.md#2",
+      "n_facts": 6,
+      "raw_tokens": 2312,
+      "arms": {
+        "oracle": {
+          "tokens": 2312,
+          "recall": 1.0,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 399,
+          "recall": 1.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 396,
+          "recall": 0.6666666666666666,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "prompt-008",
+      "op": "prompt",
+      "label": "doc:CHANGELOG.md#3",
+      "n_facts": 7,
+      "raw_tokens": 2451,
+      "arms": {
+        "oracle": {
+          "tokens": 2451,
+          "recall": 0.5714285714285714,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 656,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 648,
+          "recall": 0.5714285714285714,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "prompt-009",
+      "op": "prompt",
+      "label": "doc:CHANGELOG.md#4",
+      "n_facts": 4,
+      "raw_tokens": 840,
+      "arms": {
+        "oracle": {
+          "tokens": 840,
+          "recall": 1.0,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 258,
+          "recall": 0.75,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 231,
+          "recall": 0.5,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "prompt-010",
+      "op": "prompt",
+      "label": "doc:CONTRIBUTING.md#0",
+      "n_facts": 6,
+      "raw_tokens": 1107,
+      "arms": {
+        "oracle": {
+          "tokens": 1107,
+          "recall": 0.5,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 243,
+          "recall": 0.5,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 241,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "prompt-011",
+      "op": "prompt",
+      "label": "src:sophon/crates/cli-hooks/src/installer.rs",
+      "n_facts": 6,
+      "raw_tokens": 3334,
+      "arms": {
+        "oracle": {
+          "tokens": 3334,
+          "recall": 0.8333333333333334,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 933,
+          "recall": 0.16666666666666666,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 933,
+          "recall": 0.3333333333333333,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "prompt-012",
+      "op": "prompt",
+      "label": "src:sophon/crates/cli-hooks/src/rewriter.rs",
+      "n_facts": 7,
+      "raw_tokens": 2490,
+      "arms": {
+        "oracle": {
+          "tokens": 2490,
+          "recall": 1.0,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 788,
+          "recall": 0.2857142857142857,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 783,
+          "recall": 0.2857142857142857,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "prompt-013",
+      "op": "prompt",
+      "label": "src:sophon/crates/codebase-navigator/src/digest.rs",
+      "n_facts": 5,
+      "raw_tokens": 1993,
+      "arms": {
+        "oracle": {
+          "tokens": 1993,
+          "recall": 0.6,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 622,
+          "recall": 0.6,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 613,
+          "recall": 0.6,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "prompt-014",
+      "op": "prompt",
+      "label": "src:sophon/crates/codebase-navigator/src/extractors/c_cpp.rs",
+      "n_facts": 5,
+      "raw_tokens": 2244,
+      "arms": {
+        "oracle": {
+          "tokens": 2244,
+          "recall": 0.4,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 779,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 779,
+          "recall": 0.2,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "prompt-015",
+      "op": "prompt",
+      "label": "src:sophon/crates/codebase-navigator/src/extractors/go.rs",
+      "n_facts": 6,
+      "raw_tokens": 1100,
+      "arms": {
+        "oracle": {
+          "tokens": 1100,
+          "recall": 0.5,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 402,
+          "recall": 0.8333333333333334,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 401,
+          "recall": 0.5,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "prompt-016",
+      "op": "prompt",
+      "label": "src:sophon/crates/delta-streamer/src/differ.rs",
+      "n_facts": 4,
+      "raw_tokens": 744,
+      "arms": {
+        "oracle": {
+          "tokens": 744,
+          "recall": 1.0,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 219,
+          "recall": 1.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 200,
+          "recall": 1.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "prompt-017",
+      "op": "prompt",
+      "label": "src:sophon/crates/delta-streamer/src/lib.rs",
+      "n_facts": 7,
+      "raw_tokens": 1553,
+      "arms": {
+        "oracle": {
+          "tokens": 1553,
+          "recall": 0.7142857142857143,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 490,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 490,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "prompt-018",
+      "op": "prompt",
+      "label": "src:sophon/crates/delta-streamer/src/patcher.rs",
+      "n_facts": 6,
+      "raw_tokens": 1862,
+      "arms": {
+        "oracle": {
+          "tokens": 1862,
+          "recall": 0.16666666666666666,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 529,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 505,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "prompt-019",
+      "op": "prompt",
+      "label": "src:sophon/crates/fragment-cache/src/detector.rs",
+      "n_facts": 6,
+      "raw_tokens": 2465,
+      "arms": {
+        "oracle": {
+          "tokens": 2465,
+          "recall": 0.8333333333333334,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 757,
+          "recall": 0.8333333333333334,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 756,
+          "recall": 0.8333333333333334,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "prompt-020",
+      "op": "prompt",
+      "label": "src:sophon/crates/fragment-cache/src/encoder.rs",
+      "n_facts": 6,
+      "raw_tokens": 772,
+      "arms": {
+        "oracle": {
+          "tokens": 772,
+          "recall": 0.6666666666666666,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 251,
+          "recall": 0.5,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 251,
+          "recall": 0.5,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "prompt-021",
+      "op": "prompt",
+      "label": "src:sophon/crates/fragment-cache/src/store.rs",
+      "n_facts": 6,
+      "raw_tokens": 1206,
+      "arms": {
+        "oracle": {
+          "tokens": 1206,
+          "recall": 0.5,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 376,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 376,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "prompt-022",
+      "op": "prompt",
+      "label": "src:sophon/crates/mcp-integration/src/jsonrpc.rs",
+      "n_facts": 5,
+      "raw_tokens": 1430,
+      "arms": {
+        "oracle": {
+          "tokens": 1430,
+          "recall": 0.6,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 434,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 433,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "prompt-023",
+      "op": "prompt",
+      "label": "src:sophon/crates/mcp-integration/src/tools.rs",
+      "n_facts": 8,
+      "raw_tokens": 1899,
+      "arms": {
+        "oracle": {
+          "tokens": 1899,
+          "recall": 0.75,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 590,
+          "recall": 0.75,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 589,
+          "recall": 0.625,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "prompt-024",
+      "op": "prompt",
+      "label": "src:sophon/crates/memory-manager/src/fact_cards.rs",
+      "n_facts": 6,
+      "raw_tokens": 2864,
+      "arms": {
+        "oracle": {
+          "tokens": 2864,
+          "recall": 0.6666666666666666,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 878,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 878,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "history-025",
+      "op": "history",
+      "label": "hist:9ff478b..2e0eaf8",
+      "n_facts": 6,
+      "raw_tokens": 6513,
+      "arms": {
+        "oracle": {
+          "tokens": 6513,
+          "recall": 0.6666666666666666,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 1037,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 1037,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "history-026",
+      "op": "history",
+      "label": "hist:05ada32..44eadd8",
+      "n_facts": 7,
+      "raw_tokens": 6635,
+      "arms": {
+        "oracle": {
+          "tokens": 6635,
+          "recall": 0.5714285714285714,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 1657,
+          "recall": 0.2857142857142857,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 1630,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "history-027",
+      "op": "history",
+      "label": "hist:141a46c..e644302",
+      "n_facts": 7,
+      "raw_tokens": 6308,
+      "arms": {
+        "oracle": {
+          "tokens": 6308,
+          "recall": 0.5714285714285714,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 1537,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 1499,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "history-028",
+      "op": "history",
+      "label": "hist:3cf664d..4010849",
+      "n_facts": 8,
+      "raw_tokens": 6133,
+      "arms": {
+        "oracle": {
+          "tokens": 6133,
+          "recall": 0.75,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 1872,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 1754,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "history-029",
+      "op": "history",
+      "label": "hist:2e0eaf8..dac7c1f",
+      "n_facts": 8,
+      "raw_tokens": 5530,
+      "arms": {
+        "oracle": {
+          "tokens": 5530,
+          "recall": 0.875,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 676,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 678,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "history-030",
+      "op": "history",
+      "label": "hist:44eadd8..e3c39a0",
+      "n_facts": 8,
+      "raw_tokens": 6438,
+      "arms": {
+        "oracle": {
+          "tokens": 6438,
+          "recall": 0.875,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 2143,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 2098,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "history-031",
+      "op": "history",
+      "label": "hist:e644302..0dbe32d",
+      "n_facts": 8,
+      "raw_tokens": 5971,
+      "arms": {
+        "oracle": {
+          "tokens": 5971,
+          "recall": 1.0,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 1395,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 1394,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "history-032",
+      "op": "history",
+      "label": "hist:4010849..5623209",
+      "n_facts": 8,
+      "raw_tokens": 5917,
+      "arms": {
+        "oracle": {
+          "tokens": 5917,
+          "recall": 0.5,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 1059,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 1059,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "history-033",
+      "op": "history",
+      "label": "hist:dac7c1f..41b6076",
+      "n_facts": 8,
+      "raw_tokens": 6087,
+      "arms": {
+        "oracle": {
+          "tokens": 6087,
+          "recall": 0.625,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 1667,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 1606,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "history-034",
+      "op": "history",
+      "label": "hist:e3c39a0..6e86a06",
+      "n_facts": 7,
+      "raw_tokens": 5578,
+      "arms": {
+        "oracle": {
+          "tokens": 5578,
+          "recall": 0.42857142857142855,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 1122,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 1122,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "history-035",
+      "op": "history",
+      "label": "hist:0dbe32d..c709ada",
+      "n_facts": 8,
+      "raw_tokens": 4495,
+      "arms": {
+        "oracle": {
+          "tokens": 4495,
+          "recall": 0.625,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 1165,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 1144,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "history-036",
+      "op": "history",
+      "label": "hist:5623209..8ce3853",
+      "n_facts": 8,
+      "raw_tokens": 5278,
+      "arms": {
+        "oracle": {
+          "tokens": 5278,
+          "recall": 0.625,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 1742,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 1672,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "history-037",
+      "op": "history",
+      "label": "hist:41b6076..7c9b311",
+      "n_facts": 7,
+      "raw_tokens": 5503,
+      "arms": {
+        "oracle": {
+          "tokens": 5503,
+          "recall": 0.5714285714285714,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 984,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 969,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "history-038",
+      "op": "history",
+      "label": "hist:6e86a06..8a2fc80",
+      "n_facts": 8,
+      "raw_tokens": 4590,
+      "arms": {
+        "oracle": {
+          "tokens": 4590,
+          "recall": 0.625,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 910,
+          "recall": 0.25,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 908,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "history-039",
+      "op": "history",
+      "label": "hist:c709ada..6a6dbf1",
+      "n_facts": 8,
+      "raw_tokens": 5558,
+      "arms": {
+        "oracle": {
+          "tokens": 5558,
+          "recall": 0.625,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 1749,
+          "recall": 0.375,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 1677,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "history-040",
+      "op": "history",
+      "label": "hist:8ce3853..024f2ae",
+      "n_facts": 7,
+      "raw_tokens": 4617,
+      "arms": {
+        "oracle": {
+          "tokens": 4617,
+          "recall": 1.0,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 893,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 881,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "history-041",
+      "op": "history",
+      "label": "hist:7c9b311..b197760",
+      "n_facts": 8,
+      "raw_tokens": 5122,
+      "arms": {
+        "oracle": {
+          "tokens": 5122,
+          "recall": 0.875,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 1695,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 1669,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "history-042",
+      "op": "history",
+      "label": "hist:8a2fc80..5542a33",
+      "n_facts": 7,
+      "raw_tokens": 4892,
+      "arms": {
+        "oracle": {
+          "tokens": 4892,
+          "recall": 0.5714285714285714,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 766,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 765,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "history-043",
+      "op": "history",
+      "label": "hist:6a6dbf1..58b1944",
+      "n_facts": 8,
+      "raw_tokens": 4350,
+      "arms": {
+        "oracle": {
+          "tokens": 4350,
+          "recall": 0.5,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 867,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 867,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "history-044",
+      "op": "history",
+      "label": "hist:024f2ae..065eb79",
+      "n_facts": 8,
+      "raw_tokens": 5154,
+      "arms": {
+        "oracle": {
+          "tokens": 5154,
+          "recall": 1.0,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 1030,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 1028,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "output-045",
+      "op": "output",
+      "label": "cmd:recent history",
+      "n_facts": 6,
+      "raw_tokens": 531,
+      "arms": {
+        "oracle": {
+          "tokens": 531,
+          "recall": 0.8333333333333334,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 531,
+          "recall": 0.8333333333333334,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 531,
+          "recall": 0.8333333333333334,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "output-046",
+      "op": "output",
+      "label": "cmd:recent diffs",
+      "n_facts": 7,
+      "raw_tokens": 2320,
+      "arms": {
+        "oracle": {
+          "tokens": 2320,
+          "recall": 0.2857142857142857,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 640,
+          "recall": 0.2857142857142857,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 639,
+          "recall": 0.2857142857142857,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "output-047",
+      "op": "output",
+      "label": "cmd:directory listing",
+      "n_facts": 5,
+      "raw_tokens": 592,
+      "arms": {
+        "oracle": {
+          "tokens": 592,
+          "recall": 0.6,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 353,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 352,
+          "recall": 0.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "output-048",
+      "op": "output",
+      "label": "cmd:line counts",
+      "n_facts": 4,
+      "raw_tokens": 1104,
+      "arms": {
+        "oracle": {
+          "tokens": 1104,
+          "recall": 0.5,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 1104,
+          "recall": 0.5,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 1104,
+          "recall": 0.5,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "output-049",
+      "op": "output",
+      "label": "cmd:head commit",
+      "n_facts": 8,
+      "raw_tokens": 947,
+      "arms": {
+        "oracle": {
+          "tokens": 947,
+          "recall": 0.25,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 935,
+          "recall": 0.25,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 934,
+          "recall": 0.25,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "output-050",
+      "op": "output",
+      "label": "cmd:public fns",
+      "n_facts": 5,
+      "raw_tokens": 413,
+      "arms": {
+        "oracle": {
+          "tokens": 413,
+          "recall": 0.6,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 238,
+          "recall": 0.0,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 236,
+          "recall": 1.0,
+          "judged": true
+        }
+      }
+    },
+    {
+      "id": "output-051",
+      "op": "output",
+      "label": "cmd:manifest heads",
+      "n_facts": 7,
+      "raw_tokens": 508,
+      "arms": {
+        "oracle": {
+          "tokens": 508,
+          "recall": 0.7142857142857143,
+          "judged": true
+        },
+        "sophon": {
+          "tokens": 508,
+          "recall": 0.5714285714285714,
+          "judged": true
+        },
+        "truncate": {
+          "tokens": 508,
+          "recall": 0.7142857142857143,
+          "judged": true
+        }
+      }
+    }
+  ]
+}

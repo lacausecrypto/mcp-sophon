@@ -49,8 +49,38 @@ fn test_encode_decode_roundtrip() {
     let encoded = encode_content(original, &store, &config);
     assert!(encoded.content.contains("[FRAGMENT:react-imports]"));
 
-    let decoded = decode_content(&encoded.content, &store).expect("decode should succeed");
+    let decoded = decode_content(&encoded.content, &store);
     assert_eq!(decoded, original);
+}
+
+// F4: content that legitimately contains the placeholder syntax (docs/logs
+// about Sophon's own fragment cache) must NOT make decode fail — the
+// unknown reference is left verbatim instead of hard-erroring.
+#[test]
+fn test_unknown_fragment_ref_passes_through() {
+    let store = FragmentStore::new_memory();
+    let literal = "The cache emits tokens like [FRAGMENT:abc-123] and [FRAGMENT:not_real].";
+    let decoded = decode_content(literal, &store);
+    assert_eq!(
+        decoded, literal,
+        "unknown fragment tokens must survive verbatim"
+    );
+}
+
+// A real reference still expands; an interleaved unknown token is preserved.
+#[test]
+fn test_known_expands_unknown_preserved() {
+    let mut store = FragmentStore::new_memory();
+    store.add(Fragment {
+        id: "real".to_string(),
+        content: "EXPANDED".to_string(),
+        hash: sophon_core::hashing::hash_content("EXPANDED"),
+        token_count: 1,
+        ..Default::default()
+    });
+    let input = "before [FRAGMENT:real] middle [FRAGMENT:ghost] after";
+    let decoded = decode_content(input, &store);
+    assert_eq!(decoded, "before EXPANDED middle [FRAGMENT:ghost] after");
 }
 
 #[test]

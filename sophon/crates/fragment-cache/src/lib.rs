@@ -35,7 +35,10 @@ impl FragmentCache {
         encoded
     }
 
-    pub fn decode(&self, content: &str) -> Result<String, decoder::DecodeError> {
+    /// Expand fragment references. Infallible: unknown `[FRAGMENT:…]`
+    /// tokens (literal content, or a fragment evicted from the LRU store)
+    /// are left verbatim rather than failing the whole decode (F4).
+    pub fn decode(&self, content: &str) -> String {
         decode_content(content, &self.store)
     }
 }

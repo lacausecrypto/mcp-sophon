@@ -173,6 +173,7 @@ pub fn handle_tool_call(
                 &messages,
                 args.max_tokens,
                 args.recent_window,
+                query.as_deref(),
             );
 
             let original_tokens: usize = messages.iter().map(|m| m.token_count).sum();
@@ -418,10 +419,7 @@ pub fn handle_tool_call(
         }
         "decode_fragments" => {
             let args: DecodeFragmentsArgs = serde_json::from_value(arguments)?;
-            let decoded = server
-                .fragment_cache
-                .decode(&args.content)
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let decoded = server.fragment_cache.decode(&args.content);
             Ok(json!({ "content": decoded }))
         }
         "count_tokens" => {
@@ -550,9 +548,16 @@ fn compute_section_scores(
 
     let mut scores = HashMap::new();
     for section in &parsed.sections {
-        // Use section content for embedding (not just the name)
+        // Use section content for embedding (not just the name). Cap by
+        // *bytes* on a char boundary — a raw `[..500]` byte slice panics
+        // when a multibyte glyph straddles offset 500 (e.g. UTF-8 prose,
+        // emoji, CJK), and this runs on attacker-supplied prompt text.
         let text = if section.content.len() > 500 {
-            &section.content[..500]
+            let mut end = 500;
+            while end > 0 && !section.content.is_char_boundary(end) {
+                end -= 1;
+            }
+            &section.content[..end]
         } else {
             &section.content
         };

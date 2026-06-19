@@ -164,8 +164,47 @@ pub fn run_pipeline(command: &str, output: &str, filter: &FilterConfig) -> Compr
         }
     }
 
-    let compressed = current.into_owned();
-    let compressed_tokens = count_tokens(&compressed);
+    let mut compressed = current.into_owned();
+    let mut compressed_tokens = count_tokens(&compressed);
+
+    // Safety floor (F4): for the generic/unknown-command filter, never
+    // preserve LESS of the original than a plain head-truncation to the
+    // same token budget would. Generic heuristics (notably fuzzy dedup)
+    // could collapse distinct lines and produce a 0%-recall output where
+    // dumb truncation kept everything that mattered (bench output-050:
+    // sophon 0% vs truncate 100%). When that happens we emit the
+    // truncation baseline instead — so compress_output is, at worst, a
+    // tie with truncation rather than an anti-value.
+    //
+    // Scope: only "list-like" filters where every line is signal and
+    // aggregation can erase it — the generic fallback (unknown commands)
+    // and grep (whose GroupBy collapses `file:line: match` rows into
+    // `file: N matches`, destroying the matches themselves: bench
+    // output-050). Filters that drop *semantic noise* (git context,
+    // passing tests, progress bars) are intentionally lossy and must NOT
+    // be floored — truncation "covers" more lines there only because it
+    // keeps the noise.
+    //
+    // JSON is exempt: `json_structural` deliberately reformats the text,
+    // so the original lines won't appear verbatim — comparing line
+    // coverage there would wrongly discard a genuine structural win.
+    if filter_has_safety_floor(filter.name) && !json_already_compressed && compressed_tokens > 0 {
+        let baseline = truncate::head_truncate_tokens(output, compressed_tokens.max(1));
+        // Fall back to truncation when it preserves any line the
+        // compression dropped. A pure *count* of preserved lines is not
+        // enough: grep's GroupBy can keep the same NUMBER of lines while
+        // dropping the specific early lines (the collapsed file's matches)
+        // that truncation keeps — and that is exactly where the buried
+        // fact lives (bench output-050: cache.rs matches collapsed to a
+        // count). The superset check catches "different lines, same
+        // count"; truncation, by construction, preserves all of `baseline`.
+        if truncate::drops_lines_kept_by(&compressed, &baseline) {
+            compressed = baseline;
+            compressed_tokens = count_tokens(&compressed);
+            strategies_applied.push("safety_floor".to_string());
+        }
+    }
+
     let ratio = if original_tokens == 0 {
         1.0
     } else {
@@ -183,6 +222,14 @@ pub fn run_pipeline(command: &str, output: &str, filter: &FilterConfig) -> Compr
         strategies_applied,
         original_command: command.to_string(),
     }
+}
+
+/// Filters that get the F4 safety floor: list-like outputs where each
+/// line is signal and aggregation/dedup can silently erase the answer.
+/// Noise-dropping filters (git/test/build/docker/…) are deliberately
+/// lossy and are intentionally excluded.
+fn filter_has_safety_floor(name: &str) -> bool {
+    matches!(name, "generic" | "grep")
 }
 
 fn apply_strategy(input: &str, strategy: &CompressionStrategy) -> String {

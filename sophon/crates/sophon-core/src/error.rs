@@ -123,4 +123,16 @@ impl SophonError {
     pub fn fragment_not_found(id: impl Into<String>) -> Self {
         Self::Config(format!("fragment not found: {}", id.into()))
     }
+
+    /// A file path resolved outside the allowed filesystem root. Phrased as
+    /// a parse/invalid-argument error so the JSON-RPC layer classifies it
+    /// as a bad caller argument (the path is attacker-controllable via
+    /// prompt injection), not an internal failure.
+    pub fn path_outside_root(path: PathBuf, root: PathBuf) -> Self {
+        Self::Parse(ParseError::Other(format!(
+            "invalid path: {} escapes the allowed root {} (set SOPHON_FS_ROOT to change it)",
+            path.display(),
+            root.display()
+        )))
+    }
 }

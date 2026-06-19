@@ -71,6 +71,18 @@ pub const DEFAULT_ROLLING_REFRESH_THRESHOLD: usize = 50;
     ),
 )]
 pub fn compress_history(messages: &[Message], config: &MemoryConfig) -> CompressedMemory {
+    compress_history_query(messages, config, None)
+}
+
+/// Query-aware variant of [`compress_history`] (Tier 3). When `query` is
+/// provided, the summary of the dropped older messages is biased toward
+/// lines relevant to the question instead of being built blind at compress
+/// time. `None` reproduces the original behaviour exactly.
+pub fn compress_history_query(
+    messages: &[Message],
+    config: &MemoryConfig,
+    query: Option<&str>,
+) -> CompressedMemory {
     if messages.is_empty() {
         return CompressedMemory {
             summary: "No conversation yet.".to_string(),
@@ -135,17 +147,17 @@ pub fn compress_history(messages: &[Message], config: &MemoryConfig) -> Compress
             older
         };
         llm_summarize(target).unwrap_or_else(|| {
-            // Fallback to heuristic if LLM call fails
+            // Fallback to the deterministic summariser if the LLM call fails
             if messages.len() < config.compression_threshold {
-                summarize_recent(messages)
+                deterministic_summarize(messages, query)
             } else {
-                heuristic_summarize(older)
+                deterministic_summarize(older, query)
             }
         })
     } else if messages.len() < config.compression_threshold {
-        summarize_recent(messages)
+        deterministic_summarize(messages, query)
     } else {
-        heuristic_summarize(older)
+        deterministic_summarize(older, query)
     };
 
     let mut compressed = CompressedMemory {
@@ -255,6 +267,268 @@ fn first_sentence(content: &str) -> String {
         .collect()
 }
 
+/// Deterministic summariser selector. Defaults to the fact-preserving
+/// extractive summariser; `SOPHON_LEGACY_SUMMARY=1` restores the old
+/// first-sentence/topic-list heuristic (kept for A/B and back-compat).
+fn deterministic_summarize(messages: &[Message], query: Option<&str>) -> String {
+    let legacy = std::env::var("SOPHON_LEGACY_SUMMARY")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if legacy {
+        heuristic_summarize(messages)
+    } else {
+        extractive_summarize_query(messages, query)
+    }
+}
+
+/// Information-density score for a candidate line. Rewards the tokens that
+/// carry recoverable facts — numbers, identifiers, paths, versions, code,
+/// units — and zeroes out boilerplate. Deterministic and allocation-light.
+fn signal_score(line: &str) -> u32 {
+    let t = line.trim();
+    if t.chars().count() < 8 {
+        return 0;
+    }
+    let lower = t.to_lowercase();
+    for bp in [
+        "walk me through",
+        "tell me about",
+        "files:",
+        "what did",
+        "explain ",
+        "summarize",
+    ] {
+        if lower.starts_with(bp) {
+            return 0;
+        }
+    }
+    let mut score = 0u32;
+    for tok in t.split(|c: char| c.is_whitespace()) {
+        let tok = tok.trim_matches(|c: char| {
+            !c.is_alphanumeric() && !matches!(c, '_' | '/' | '.' | '%' | '$')
+        });
+        if tok.is_empty() {
+            continue;
+        }
+        let chars: Vec<char> = tok.chars().collect();
+        let has_digit = chars.iter().any(|c| c.is_ascii_digit());
+        let has_underscore = tok.contains('_');
+        let has_slash = tok.contains('/');
+        let internal_caps = chars
+            .iter()
+            .enumerate()
+            .any(|(i, &c)| i > 0 && c.is_ascii_uppercase() && chars[i - 1].is_ascii_lowercase());
+        let dot_ext = [
+            ".rs", ".md", ".py", ".toml", ".json", ".lock", ".yml", ".txt",
+        ]
+        .iter()
+        .any(|e| tok.contains(e));
+        if has_digit {
+            score += 3;
+        }
+        if has_underscore || has_slash || internal_caps || dot_ext {
+            score += 2;
+        }
+        if tok.ends_with('%') || tok.starts_with('$') {
+            score += 2;
+        }
+    }
+    if t.contains('`') {
+        score += 4;
+    }
+    for u in [
+        "mb", "kb", "gb", " ms", "loc", "token", "test", "commit", "version", "ratio", "pts",
+        "bench", "error", "warning",
+    ] {
+        if lower.contains(u) {
+            score += 1;
+        }
+    }
+    score
+}
+
+/// Fact-preserving extractive summary. Replaces the first-sentence-only
+/// heuristic: every line of the older messages is scored by information
+/// density (`signal_score`) and the highest-signal, de-duplicated lines are
+/// kept within a character budget, ordered by score so that the downstream
+/// budget enforcer (which trims the tail) drops the least informative lines
+/// first. Specific facts buried past a message's first sentence now survive.
+pub fn extractive_summarize(messages: &[Message]) -> String {
+    extractive_summarize_query(messages, None)
+}
+
+/// Query-aware extractive summary (Tier 3 fix). Identical to
+/// [`extractive_summarize`] when `query` is `None`, but when a query is
+/// provided, lines that lexically overlap the query are ranked **first**
+/// (then by information density, then original order). The old default
+/// summarised the dropped tail blind to the question, so a buried fact the
+/// caller is actually asking about could lose the budget race to a denser
+/// but irrelevant line. Ranking relevance-first lifts exactly the lines
+/// that answer the query into the summary.
+pub fn extractive_summarize_query(messages: &[Message], query: Option<&str>) -> String {
+    if messages.is_empty() {
+        return "No previous messages to summarize.".to_string();
+    }
+    const MAX_UNIT_CHARS: usize = 240;
+    // Budget is relative to the input so the summary is always a real
+    // compression (~4x) of the older slice, never a near-copy — clamped so
+    // tiny histories still get a floor and huge ones don't blow up. The
+    // downstream token enforcer trims further against the hard max_tokens.
+    let input_chars: usize = messages.iter().map(|m| m.content.len()).sum();
+    let budget_chars: usize = (input_chars / 4).clamp(200, 2800);
+
+    let q_terms = query.map(query_terms).unwrap_or_default();
+
+    // Candidate units: (order, role, text, signal_score, query_relevance).
+    let mut units: Vec<(usize, Role, String, u32, u32)> = Vec::new();
+    let mut order = 0usize;
+    for m in messages {
+        for raw_line in m.content.split('\n') {
+            let line = raw_line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let chunks: Vec<&str> = if line.chars().count() > 220 {
+                line.split_terminator(['.', '!', '?']).collect()
+            } else {
+                vec![line]
+            };
+            for ch in chunks {
+                let ch = ch.trim();
+                if ch.chars().count() < 8 {
+                    continue;
+                }
+                let text: String = ch.chars().take(MAX_UNIT_CHARS).collect();
+                let sc = signal_score(ch);
+                let rel = relevance_score(ch, &q_terms);
+                units.push((order, m.role, text, sc, rel));
+                order += 1;
+            }
+        }
+    }
+    if units.is_empty() {
+        return heuristic_summarize(messages);
+    }
+
+    // Rank: query relevance desc, then signal desc, then original order asc
+    // (stable, deterministic). With no query every relevance is 0, so this
+    // reduces exactly to the previous signal-only ranking.
+    let mut idx: Vec<usize> = (0..units.len()).collect();
+    idx.sort_by(|&a, &b| {
+        units[b]
+            .4
+            .cmp(&units[a].4)
+            .then(units[b].3.cmp(&units[a].3))
+            .then(units[a].0.cmp(&units[b].0))
+    });
+
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut chosen: Vec<usize> = Vec::new();
+    let mut chars = 0usize;
+    for &i in &idx {
+        // Keep a unit if it carries information density OR matches the query;
+        // drop only pure boilerplate that is also irrelevant to the question.
+        if units[i].3 == 0 && units[i].4 == 0 {
+            continue;
+        }
+        let key = units[i].2.to_lowercase();
+        if !seen.insert(key) {
+            continue;
+        }
+        if chars + units[i].2.len() > budget_chars && !chosen.is_empty() {
+            break;
+        }
+        chosen.push(i);
+        chars += units[i].2.len() + 3;
+    }
+    if chosen.is_empty() {
+        return heuristic_summarize(messages);
+    }
+
+    let mut out = String::with_capacity(chars);
+    for &i in &chosen {
+        let tag = match units[i].1 {
+            Role::User => "Q",
+            Role::Assistant => "A",
+            Role::System => "S",
+        };
+        out.push_str(tag);
+        out.push_str(": ");
+        out.push_str(&units[i].2);
+        out.push('\n');
+    }
+    out.trim_end().to_string()
+}
+
+/// Stopwords dropped from query terms — generic words carry no targeting
+/// signal. Small on purpose so domain terms survive.
+static QUERY_STOPWORDS: &[&str] = &[
+    "the",
+    "and",
+    "for",
+    "what",
+    "which",
+    "who",
+    "when",
+    "where",
+    "why",
+    "how",
+    "did",
+    "does",
+    "was",
+    "were",
+    "are",
+    "you",
+    "your",
+    "our",
+    "with",
+    "that",
+    "this",
+    "from",
+    "about",
+    "into",
+    "tell",
+    "explain",
+    "summarize",
+    "summarise",
+    "give",
+    "show",
+    "list",
+    "describe",
+];
+
+/// Tokenize a query into distinct lowercase terms (alphanumeric runs of
+/// length ≥ 3, minus stopwords) used to score line relevance.
+fn query_terms(query: &str) -> Vec<String> {
+    let mut terms = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for raw in query.split(|c: char| !c.is_alphanumeric() && c != '_') {
+        let t = raw.trim_matches('_').to_lowercase();
+        if t.chars().count() < 3 || QUERY_STOPWORDS.contains(&t.as_str()) {
+            continue;
+        }
+        if seen.insert(t.clone()) {
+            terms.push(t);
+        }
+    }
+    terms
+}
+
+/// How many distinct query terms appear (case-insensitive substring) in a
+/// candidate line. Substring rather than token-equality so `cache.rs`
+/// matches a query mentioning `cache`, and `oldest_entry_age_seconds`
+/// matches `age`.
+fn relevance_score(line: &str, q_terms: &[String]) -> u32 {
+    if q_terms.is_empty() {
+        return 0;
+    }
+    let lower = line.to_lowercase();
+    q_terms
+        .iter()
+        .filter(|t| lower.contains(t.as_str()))
+        .count() as u32
+}
+
 /// LLM-backed abstractive summarization. Shells out to the command in
 /// `SOPHON_LLM_CMD` (default: `claude -p --model haiku`). Returns
 /// `None` on any failure so the caller can fall back to the heuristic.
@@ -358,17 +632,6 @@ fn llm_call(content: &str, is_meta: bool) -> Option<String> {
     crate::llm_client::call_llm(&prompt)
 }
 
-fn summarize_recent(messages: &[Message]) -> String {
-    messages
-        .iter()
-        .rev()
-        .take(5)
-        .rev()
-        .map(|m| format!("{:?}: {}", m.role, first_sentence(&m.content)))
-        .collect::<Vec<_>>()
-        .join(" | ")
-}
-
 fn enforce_budget(memory: &mut CompressedMemory, max_tokens: usize) {
     let mut summary = memory.summary.clone();
     let mut facts = memory.stable_facts.clone();
@@ -397,7 +660,16 @@ fn enforce_budget(memory: &mut CompressedMemory, max_tokens: usize) {
         }
 
         if summary.len() > 120 {
-            summary.truncate(summary.len().saturating_sub(80));
+            // Back the cut point up to a UTF-8 char boundary — `truncate`
+            // panics mid-character, and summaries legitimately contain
+            // multibyte glyphs (e.g. the `→` in "511 → 301"). The
+            // query-aware path surfaces such lines more often, which is how
+            // this latent bug first bit.
+            let mut cut = summary.len().saturating_sub(80);
+            while cut > 0 && !summary.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            summary.truncate(cut);
             summary.push_str("...");
             continue;
         }
@@ -469,10 +741,12 @@ pub fn refresh_rolling_summary(
         .unwrap_or(false);
     let use_llm =
         !opt_out && (config.use_llm_summarization || std::env::var("SOPHON_LLM_CMD").is_ok());
+    // Rolling summary is built at ingest time, before any query exists —
+    // necessarily query-blind. Query-aware biasing happens at compress time.
     let summary = if use_llm {
-        llm_summarize(to_summarize).unwrap_or_else(|| heuristic_summarize(to_summarize))
+        llm_summarize(to_summarize).unwrap_or_else(|| deterministic_summarize(to_summarize, None))
     } else {
-        heuristic_summarize(to_summarize)
+        deterministic_summarize(to_summarize, None)
     };
 
     Some(RollingSummary {
@@ -570,6 +844,121 @@ mod rolling_tests {
             )));
         }
         out
+    }
+
+    #[test]
+    fn extractive_keeps_facts_buried_past_first_sentence() {
+        // The fact (binary size) lives in the 3rd sentence — the old
+        // first-sentence heuristic dropped it; the extractive path must keep it.
+        let msgs = vec![asst(
+            "docs(readme): full rewrite. This commit reworks the intro prose. \
+             The stale binary size claim was 7.2 MB; the real binary is 5.2 MB. \
+             It also corrects the test count from 303 to 405 in README.md.",
+        )];
+        let s = extractive_summarize(&msgs);
+        assert!(s.contains("5.2"), "must keep buried numeric fact, got: {s}");
+        assert!(
+            s.contains("405") || s.contains("README.md"),
+            "must keep buried identifier/count, got: {s}"
+        );
+        // The old heuristic only kept the first sentence — confirm the contrast.
+        let legacy = heuristic_summarize(&msgs);
+        assert!(
+            !legacy.contains("5.2"),
+            "legacy heuristic should NOT contain the buried fact (it keeps only the first sentence)"
+        );
+    }
+
+    #[test]
+    fn extractive_is_deterministic() {
+        let msgs = vec![
+            asst("bench: real_session_holistic.py adds 4 dimensions weighted 35/30/20/15."),
+            asst("feat: --anonymise flag scrubs paths in real_session_* benches."),
+        ];
+        assert_eq!(extractive_summarize(&msgs), extractive_summarize(&msgs));
+    }
+
+    // Tier 3: with a tight budget, a query must pull its relevant (but not
+    // densest) line into the summary ahead of unrelated dense lines.
+    #[test]
+    fn query_aware_surfaces_relevant_line() {
+        // Many dense, numeric lines crowd a small budget; the database line
+        // carries less raw "signal" and would lose the budget race blind.
+        // A query about the database must flip it into the summary.
+        let mut body = String::new();
+        for i in 0..20 {
+            body.push_str(&format!(
+                "Metric row {i}: latency {i}.5 ms p99 across {i}096 shards in region us-east-{i}.\n"
+            ));
+        }
+        body.push_str("The database migration moved us to postgres 16 for durability.\n");
+        let msgs = vec![asst(&body)];
+
+        let blind = extractive_summarize_query(&msgs, None);
+        let with_q = extractive_summarize_query(&msgs, Some("which database did we migrate to"));
+
+        assert!(
+            !blind.to_lowercase().contains("postgres"),
+            "blind summary should be crowded out by denser metric rows, got: {blind}"
+        );
+        assert!(
+            with_q.to_lowercase().contains("postgres"),
+            "query about database must surface the postgres line, got: {with_q}"
+        );
+    }
+
+    // The query-aware path must keep a relevant line even when it carries
+    // little intrinsic "signal" (no numbers/identifiers) — that line would
+    // be dropped by the blind density filter.
+    #[test]
+    fn query_aware_keeps_low_signal_relevant_line() {
+        let msgs = vec![asst(
+            "The build pipeline runs fast. \
+             The deployment owner is Priya on the platform team. \
+             Numbers everywhere: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 ms.",
+        )];
+        let with_q = extractive_summarize_query(&msgs, Some("who is the deployment owner"));
+        assert!(
+            with_q.to_lowercase().contains("priya"),
+            "low-signal but query-relevant line must survive, got: {with_q}"
+        );
+    }
+
+    // Regression: enforce_budget used to `String::truncate` at a byte
+    // offset, panicking when the summary contained multibyte glyphs (the
+    // `→` arrows common in this repo's commit/bench lines). A tight budget
+    // forces the truncate branch; it must not panic.
+    #[test]
+    fn enforce_budget_handles_multibyte_summary() {
+        let mut msgs = Vec::new();
+        for i in 0..30 {
+            msgs.push(asst(&format!(
+                "bench row {i}: compressed 589 → 473 tokens, ratio 19.7% on file_{i}.rs"
+            )));
+        }
+        let cfg = MemoryConfig {
+            max_tokens: 60,
+            ..MemoryConfig::default()
+        };
+        // Must not panic regardless of query-aware ranking surfacing arrows.
+        let q = compress_history_query(&msgs, &cfg, Some("what ratio did the bench reach"));
+        assert!(q.token_count <= 60 || !q.summary.is_empty());
+        let blind = compress_history(&msgs, &cfg);
+        let _ = blind;
+    }
+
+    // No query → byte-for-byte identical to the original blind summary, so
+    // the ingest/rolling path and existing behaviour are untouched.
+    #[test]
+    fn query_none_is_unchanged_behaviour() {
+        let msgs = vec![
+            asst("commit a1b2c3 bumped version 0.5.4 and fixed cache.rs:95."),
+            asst("benchmark improved recall from 28.1% to 35.3% at equal budget."),
+        ];
+        assert_eq!(
+            extractive_summarize_query(&msgs, None),
+            extractive_summarize(&msgs)
+        );
     }
 
     #[test]

@@ -342,3 +342,22 @@ fn tool_error_produces_is_error_with_structured_code() {
         "expected Sophon error code, got {code}"
     );
 }
+
+// Robustness: the server dispatches every tools/call on a spawn_blocking
+// task and maps a panic in that task to a JSON-RPC internal error instead
+// of letting it tear down the process. This guards that dispatch contract
+// (and is why the release profile must stay `panic = "unwind"`): if the
+// catch is ever changed to `.await.unwrap()` the panic would propagate.
+#[tokio::test]
+async fn spawn_blocking_isolates_tool_panic_as_joinerror() {
+    let handle = tokio::task::spawn_blocking(|| -> serde_json::Value {
+        panic!("simulated tool panic");
+    });
+    let joined = handle.await;
+    assert!(
+        joined.is_err(),
+        "a panicking tool task must surface as a caught JoinError, not abort the server"
+    );
+    let err = joined.unwrap_err();
+    assert!(err.is_panic(), "the JoinError must be a panic, got {err:?}");
+}

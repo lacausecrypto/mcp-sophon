@@ -4,7 +4,11 @@ pub mod patcher;
 pub mod protocol;
 pub mod state;
 
-use std::{fs, io::Write, path::Path};
+use std::{
+    fs,
+    io::Write,
+    path::{Component, Path, PathBuf},
+};
 
 use differ::generate_diff;
 use protocol::{FileChanges, FileReadResponse, FileWriteRequest};
@@ -19,13 +23,71 @@ use state::{FileState, StateStore};
 #[derive(Debug)]
 pub struct DeltaStreamer {
     state: StateStore,
+    /// When set, every read/write path is confined to this (canonicalized)
+    /// root: `..`, absolute paths, and symlinks that escape it are rejected.
+    /// `None` disables confinement (the library default, kept for tests and
+    /// embedders that do their own sandboxing). The MCP server always sets
+    /// it — see [`DeltaStreamer::with_fs_root`].
+    fs_root: Option<PathBuf>,
 }
 
 impl DeltaStreamer {
     pub fn new(max_files: usize) -> Self {
         Self {
             state: StateStore::new(max_files),
+            fs_root: None,
         }
+    }
+
+    /// Confine all subsequent read/write paths to `root`. The root must
+    /// exist (it is canonicalized up front). Any path that resolves outside
+    /// it — via `..`, an absolute path, or a symlink — is rejected with
+    /// [`SophonError::path_outside_root`] instead of touching the file.
+    ///
+    /// This is the F1 fix: without it, a prompt-injected
+    /// `../../.ssh/id_rsa` reaches arbitrary files on disk.
+    pub fn with_fs_root(mut self, root: impl AsRef<Path>) -> Result<Self, SophonError> {
+        let canonical = root.as_ref().canonicalize().map_err(|e| {
+            SophonError::Config(format!(
+                "SOPHON_FS_ROOT {:?} is not a usable directory: {e}",
+                root.as_ref()
+            ))
+        })?;
+        self.fs_root = Some(canonical);
+        Ok(self)
+    }
+
+    /// Resolve `path` against the configured root, rejecting any escape.
+    /// Returns the path unchanged when confinement is disabled.
+    fn resolve_confined(&self, path: &Path) -> Result<PathBuf, SophonError> {
+        let Some(root) = self.fs_root.as_ref() else {
+            return Ok(path.to_path_buf());
+        };
+
+        // An absolute input is checked as-is; a relative one is anchored at
+        // the root. Either way we strip `.`/`..` lexically so a path like
+        // `<root>/../../etc/passwd` collapses to `/etc/passwd`.
+        let candidate = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            root.join(path)
+        };
+        let normalized = normalize_lexical(&candidate);
+
+        // Containment is decided on the *canonical* form, not the lexical
+        // one. Canonicalising resolves symlinks, which (a) blocks a symlink
+        // inside the root that escapes it, and (b) — just as important for
+        // not over-rejecting — lets a symlinked root work: `SOPHON_FS_ROOT=/tmp`
+        // canonicalises to `/private/tmp` on macOS, and an input `/tmp/x`
+        // must resolve to the same real location rather than be rejected for
+        // a lexical `/tmp` vs `/private/tmp` mismatch. `root` was already
+        // canonicalised in `with_fs_root`.
+        let real = canonical_within(&normalized);
+        if !real.starts_with(root) {
+            return Err(SophonError::path_outside_root(real, root.clone()));
+        }
+
+        Ok(normalized)
     }
 
     pub fn read_file_delta<P: AsRef<Path>>(
@@ -34,7 +96,7 @@ impl DeltaStreamer {
         known_version: Option<u64>,
         known_hash: Option<&str>,
     ) -> Result<FileReadResponse, SophonError> {
-        let path_buf = path.as_ref().to_path_buf();
+        let path_buf = self.resolve_confined(path.as_ref())?;
         if !path_buf.exists() {
             return Err(SophonError::file_not_found(path_buf));
         }
@@ -149,7 +211,7 @@ impl DeltaStreamer {
     ) -> Result<FileReadResponse, SophonError> {
         use patcher::{apply_diff, apply_structured_edits};
 
-        let path = request.path;
+        let path = self.resolve_confined(&request.path)?;
         let existing_content = if path.exists() {
             fs::read_to_string(&path)?
         } else {
@@ -203,6 +265,53 @@ impl DeltaStreamer {
 
     pub fn state_store(&self) -> &StateStore {
         &self.state
+    }
+}
+
+/// Strip `.` and `..` from a path lexically (without touching the
+/// filesystem), so containment can be checked before any IO. `..` pops the
+/// previous component but never climbs above the filesystem root, so the
+/// result, combined with a `starts_with(root)` check, blocks traversal.
+fn normalize_lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => out.push(prefix.as_os_str()),
+            Component::RootDir => out.push(Component::RootDir.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::Normal(segment) => out.push(segment),
+        }
+    }
+    out
+}
+
+/// Resolve `path` to its real location for containment checks: canonicalise
+/// the deepest ancestor that actually exists (resolving symlinks) and
+/// re-attach the not-yet-existing tail. For a path that fully exists this is
+/// just `canonicalize`; for a write to a new file it canonicalises the
+/// existing parent directory and appends the new file name. Falls back to
+/// the input if nothing along the chain canonicalises.
+fn canonical_within(path: &Path) -> PathBuf {
+    let mut existing = path;
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    loop {
+        if let Ok(real) = existing.canonicalize() {
+            let mut out = real;
+            for name in tail.iter().rev() {
+                out.push(name);
+            }
+            return out;
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                tail.push(name.to_os_string());
+                existing = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
     }
 }
 

@@ -28,8 +28,8 @@ pub use question_classifier::{classify_question, QuestionMode};
 pub use react::{react_decide, ReactDecision};
 pub use reconstructor::expand_memory;
 pub use summarizer::{
-    compress_history, compress_history_with_rolling, refresh_rolling_summary, MemoryConfig,
-    RollingSummary, DEFAULT_ROLLING_REFRESH_THRESHOLD,
+    compress_history, compress_history_query, compress_history_with_rolling,
+    refresh_rolling_summary, MemoryConfig, RollingSummary, DEFAULT_ROLLING_REFRESH_THRESHOLD,
 };
 pub use tail_summary::summarise_tail;
 
@@ -195,12 +195,15 @@ impl MemoryManager {
     }
 
     /// Compress with per-call overrides on top of the stored config.
-    /// Unset overrides fall back to `self.config`.
+    /// Unset overrides fall back to `self.config`. When `query` is provided,
+    /// the summary of the dropped older messages is biased toward lines
+    /// relevant to the question (Tier 3 query-aware history).
     pub fn compress_with_overrides(
         &self,
         messages: &[Message],
         max_tokens: Option<usize>,
         recent_window: Option<usize>,
+        query: Option<&str>,
     ) -> CompressedMemory {
         let mut cfg = self.config.clone();
         if let Some(max) = max_tokens {
@@ -209,7 +212,7 @@ impl MemoryManager {
         if let Some(win) = recent_window {
             cfg.recent_window = win;
         }
-        compress_history(messages, &cfg)
+        compress_history_query(messages, &cfg, query)
     }
 
     /// Append messages to the session history. If a persistence path is

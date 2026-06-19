@@ -32,8 +32,9 @@ pub fn get_tool_definitions() -> Vec<ToolDefinition> {
                 response also includes top-k retrieved chunks relevant to that query — \
                 this closes the recall gap on long conversations where summary alone is \
                 not enough. The retriever uses a deterministic hash embedder by default \
-                (no ML, no model download); build the workspace with --features bert for \
-                semantic embeddings via candle.".to_string(),
+                (lexical matching, no ML, no model download). For genuine semantic \
+                embeddings, build with `--features bge` (BGE-small via fastembed, ~33 MB \
+                model fetched on first use) and set SOPHON_EMBEDDER=bge.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -81,7 +82,9 @@ pub fn get_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "read_file_delta".to_string(),
-            description: "Read file, returning delta from known version/hash when possible.".to_string(),
+            description: "Read file, returning delta from known version/hash when possible. \
+                Paths are confined to the server's filesystem root (the working directory, \
+                or SOPHON_FS_ROOT); paths that escape it are rejected.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -94,7 +97,9 @@ pub fn get_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "write_file_delta".to_string(),
-            description: "Write file changes using delta operations or structured edits.".to_string(),
+            description: "Write file changes using delta operations or structured edits. \
+                Overlapping structured edits are rejected (no silent corruption), and paths \
+                are confined to the server's filesystem root (working dir, or SOPHON_FS_ROOT).".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

@@ -49,12 +49,59 @@ mod tests {
 
     #[test]
     fn generic_dedups_and_strips_blank_lines() {
-        let input = "useful line 1\n\nuseful line 2\n\n\nrepeated\nrepeated\nrepeated";
+        // The two non-repeated lines are deliberately dissimilar so fuzzy
+        // dedup won't merge them — that keeps this a clean test of
+        // identical-line dedup + blank stripping, with no distinct-line
+        // loss that would (correctly) trip the safety floor.
+        let input = "alpha header summary\n\nzeta footer total\n\n\nrepeated\nrepeated\nrepeated";
         let f = generic_filter();
         let r = run_pipeline("unknown_cmd", input, &f);
         assert!(r.compressed.contains("(x3)"));
         // Blank lines gone
         assert!(!r.compressed.contains("\n\n\n"));
+        // The dedup win is real (identical lines) and no distinct line was
+        // lost, so the safety floor must NOT engage and revert it.
+        assert!(!r.strategies_applied.iter().any(|s| s == "safety_floor"));
+    }
+
+    // F4 safety floor: when generic heuristics (fuzzy dedup here) collapse
+    // *distinct* lines and would drop content that a plain truncation
+    // keeps, the floor reverts to truncation so we never do worse.
+    #[test]
+    fn generic_safety_floor_never_worse_than_truncation() {
+        // Many distinct-but-similar lines: fuzzy dedup is tempted to merge
+        // them, destroying the unique payload on each line.
+        let input = (0..200)
+            .map(|i| format!("distinct payload row number {i} value={i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let f = generic_filter();
+        let r = run_pipeline("some_unknown_tool --list", &input, &f);
+
+        let baseline = crate::truncate::head_truncate_tokens(&input, r.compressed_tokens.max(1));
+        let comp_cov = crate::truncate::unique_line_coverage(&input, &r.compressed);
+        let base_cov = crate::truncate::unique_line_coverage(&input, &baseline);
+        // The guarantee: compressed preserves at least as many distinct
+        // original lines as truncation to the same budget.
+        assert!(
+            comp_cov >= base_cov,
+            "compress_output ({comp_cov}) must not preserve fewer lines than truncation ({base_cov})"
+        );
+    }
+
+    #[test]
+    fn generic_safety_floor_exempts_json() {
+        // JSON structural compression reformats the text; the floor must
+        // not clobber that genuine structural win.
+        let items = (0..50)
+            .map(|i| format!("{{\"id\": {i}, \"name\": \"item-{i}\"}}"))
+            .collect::<Vec<_>>()
+            .join(",\n");
+        let input = format!("[{items}]");
+        let f = generic_filter();
+        let r = run_pipeline("curl https://api.example.com/items", &input, &f);
+        assert!(r.strategies_applied.iter().any(|s| s == "json_structural"));
+        assert!(!r.strategies_applied.iter().any(|s| s == "safety_floor"));
     }
 
     #[test]

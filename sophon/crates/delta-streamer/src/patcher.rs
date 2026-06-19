@@ -25,11 +25,18 @@ pub enum EditError {
 
     #[error("Invalid line range: {0}-{1}")]
     InvalidLineRange(usize, usize),
+
+    #[error(
+        "Overlapping edits: ranges {0}-{1} and {2}-{3} touch the same lines; \
+         apply them in separate calls or merge them into one edit"
+    )]
+    OverlappingEdits(usize, usize, usize, usize),
 }
 
 /// Apply diff operations to content.
 pub fn apply_diff(base: &str, operations: &[DiffOperation]) -> Result<String, PatchError> {
     let (mut lines, had_trailing_newline) = split_lines(base);
+    let eol = detect_eol(base);
 
     // Apply non-keep operations from bottom to top to avoid index-shift issues.
     let mut indexed_ops = operations
@@ -82,7 +89,7 @@ pub fn apply_diff(base: &str, operations: &[DiffOperation]) -> Result<String, Pa
         }
     }
 
-    Ok(join_lines(&lines, had_trailing_newline))
+    Ok(join_lines(&lines, had_trailing_newline, eol))
 }
 
 /// Apply structured edits (safer than raw diff).
@@ -91,11 +98,31 @@ pub fn apply_structured_edits(
     edits: &[StructuredEdit],
 ) -> Result<String, EditError> {
     let (mut lines, had_trailing_newline) = split_lines(content);
+    let eol = detect_eol(content);
 
     let mut resolved = Vec::new();
     for edit in edits {
         let (start, end) = resolve_anchor(&lines, &edit.anchor)?;
         resolved.push((start, end, edit.operation.clone()));
+    }
+
+    // Reject overlapping edits *before* touching anything. The edits are
+    // applied bottom-to-top, which is only correct when no two edits touch
+    // the same lines: two edits whose anchor ranges intersect (e.g. a
+    // Replace on lines 1-2 and another on 2-3) splice over each other and
+    // silently destroy data. A file-writing tool must never corrupt — so
+    // we fail loudly instead and let the caller split or merge the edits.
+    // O(n^2) is fine: edit batches are tiny.
+    for i in 0..resolved.len() {
+        for j in (i + 1)..resolved.len() {
+            let (a_start, a_end, _) = &resolved[i];
+            let (b_start, b_end, _) = &resolved[j];
+            if ranges_overlap(*a_start, *a_end, *b_start, *b_end) {
+                return Err(EditError::OverlappingEdits(
+                    *a_start, *a_end, *b_start, *b_end,
+                ));
+            }
+        }
     }
 
     resolved.sort_by(|(a_start, _, _), (b_start, _, _)| b_start.cmp(a_start));
@@ -146,7 +173,15 @@ pub fn apply_structured_edits(
         }
     }
 
-    Ok(join_lines(&lines, had_trailing_newline))
+    Ok(join_lines(&lines, had_trailing_newline, eol))
+}
+
+/// Whether two 1-based inclusive line ranges intersect. Point anchors
+/// (resolved to `start == end`) are treated as a single occupied line, so
+/// two edits targeting the same anchor are correctly flagged as
+/// overlapping rather than silently clobbering each other.
+fn ranges_overlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) -> bool {
+    a_start <= b_end && b_start <= a_end
 }
 
 fn resolve_anchor(lines: &[String], anchor: &EditAnchor) -> Result<(usize, usize), EditError> {
@@ -232,18 +267,30 @@ fn split_lines(content: &str) -> (Vec<String>, bool) {
     (lines, trailing)
 }
 
-fn join_lines(lines: &[String], trailing_newline: bool) -> String {
+/// The dominant line ending of `content`. `str::lines()` discards `\r`, so
+/// without restoring it on join a CRLF (Windows) file gets silently
+/// rewritten as LF — F3. We treat the file as CRLF if it contains any
+/// `\r\n`, LF otherwise.
+fn detect_eol(content: &str) -> &'static str {
+    if content.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    }
+}
+
+fn join_lines(lines: &[String], trailing_newline: bool, eol: &str) -> String {
     if lines.is_empty() {
         return if trailing_newline {
-            "\n".to_string()
+            eol.to_string()
         } else {
             String::new()
         };
     }
 
-    let mut out = lines.join("\n");
+    let mut out = lines.join(eol);
     if trailing_newline {
-        out.push('\n');
+        out.push_str(eol);
     }
     out
 }

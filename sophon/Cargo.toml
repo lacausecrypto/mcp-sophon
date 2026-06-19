@@ -16,7 +16,7 @@ exclude = ["fuzz"]
 resolver = "2"
 
 [workspace.package]
-version = "0.5.4"
+version = "0.6.0"
 edition = "2021"
 license = "MIT"
 authors = ["Sophon Contributors"]
@@ -37,20 +37,22 @@ authors = ["Sophon Contributors"]
 # - codegen-units = 1 single unit makes lto strictly more effective
 #                     at the cost of compile parallelism.
 # - strip     = true  drop debug symbols from the release binary.
-# - panic     = "abort"
-#                     no unwind tables — the MCP stdio loop is
-#                     already infallible at the dispatcher level
-#                     and the workspace contains no `catch_unwind`,
-#                     so abort-on-panic is a strict improvement
-#                     (smaller AND safer: a panic now crashes the
-#                     process cleanly instead of risking a partially-
-#                     unwound stack).
+# - panic     = "unwind"
+#                     REQUIRED for per-tool panic isolation. `run_stdio`
+#                     dispatches every `tools/call` on a `spawn_blocking`
+#                     task inside a `JoinSet`; a panic there is caught as a
+#                     `JoinError` and turned into a JSON-RPC internal-error
+#                     response, keeping the server (and every other session)
+#                     alive. That catch only works while the stack can
+#                     unwind — under `panic = "abort"` a single `unwrap` in
+#                     any tool aborts the whole process. Costs some unwind
+#                     tables (slightly larger binary); resilience wins.
 [profile.release]
 opt-level = 3
 lto = "fat"
 codegen-units = 1
 strip = true
-panic = "abort"
+panic = "unwind"
 
 [workspace.dependencies]
 anyhow = "1.0"

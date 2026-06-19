@@ -13,7 +13,12 @@ fn bench_compress_large_prompt(c: &mut Criterion) {
 
     c.bench_function("compress_large_prompt", |b| {
         b.iter(|| {
-            let _ = compress_prompt(black_box(&parsed), black_box(&analysis), black_box(&config));
+            let _ = compress_prompt(
+                black_box(&parsed),
+                black_box(&analysis),
+                black_box(&config),
+                black_box(None),
+            );
         })
     });
 }
