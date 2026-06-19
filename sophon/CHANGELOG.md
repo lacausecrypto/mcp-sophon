@@ -39,6 +39,12 @@ recall bench does not capture.
   frames, so short traces are untouched.
 
 ### Changed
+- **`compress_prompt` de-duplicates redundant sections (T4.2).** When two
+  selected sections carry the same content (normalized: case- and
+  whitespace-insensitive) — e.g. a block repeated under two headers — only
+  one keeps the budget; backfill won't re-spend it on a near-copy either.
+  Neutral on the bench (its 24 real source files have no duplicate
+  sections, so no regression) — the win is on genuinely redundant prompts.
 - **`compress_output` strips ANSI/terminal escapes up-front (T1.1).** Real
   tool output is colored, and the per-filter regexes are anchored
   (`^test … ok$`), so colored input defeated every filter and

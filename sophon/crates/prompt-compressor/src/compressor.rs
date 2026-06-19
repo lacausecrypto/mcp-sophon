@@ -182,6 +182,11 @@ pub fn compress_prompt(
     resolve_dependencies(parsed, &mut included);
 
     let mut selected = select_sections_in_order(parsed, &included);
+    // Drop sections whose normalized content duplicates one already
+    // selected (e.g. a prompt that repeats the same block under two
+    // headers). Keeping both just burns budget on a redundant copy; the
+    // freed budget is reclaimed by backfill for genuinely new content.
+    dedup_selected_sections(&mut selected);
     if selected.is_empty() {
         if let Some(section) = parsed.sections.first() {
             selected.push(section);
@@ -445,19 +450,48 @@ fn backfill_to_budget<'a>(
             .then(ia.cmp(ib))
     });
 
+    // Diversity guard (MMR-lite): never spend backfill budget on a section
+    // whose normalized content duplicates one already selected.
+    let mut seen: HashSet<String> = selected.iter().map(|s| dedup_key(&s.content)).collect();
+
     let mut total = count_selected_cost(selected, include_headers);
     for (_, section) in candidates {
         if total >= target_tokens {
             break;
         }
+        let key = dedup_key(&section.content);
+        if seen.contains(&key) {
+            continue;
+        }
         let cost = section_cost(section, include_headers);
         if total + cost <= max_tokens {
             selected.push(section);
+            seen.insert(key);
             total += cost;
         }
     }
 
     selected.sort_by(|a, b| a.id.cmp(&b.id));
+}
+
+/// Normalized content key for exact-duplicate detection: lowercased with
+/// all whitespace runs collapsed to a single space. Two sections with the
+/// same key carry the same information, so only one is worth budget.
+fn dedup_key(content: &str) -> String {
+    content
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// Remove sections whose normalized content duplicates an earlier one in
+/// `selected`, keeping the first occurrence (document order is preserved
+/// by the caller). Exact (normalized) match only — never drops a section
+/// that carries distinct content.
+fn dedup_selected_sections(selected: &mut Vec<&PromptSection>) {
+    let mut seen: HashSet<String> = HashSet::new();
+    selected.retain(|s| seen.insert(dedup_key(&s.content)));
 }
 
 /// Score every section against the query with BM25, treating the prompt's
@@ -711,6 +745,31 @@ mod truncate_tests {
             priority: 1,
             dependencies: vec![],
         }
+    }
+
+    fn section_id(id: &str, content: &str) -> PromptSection {
+        PromptSection {
+            id: id.into(),
+            ..section(content)
+        }
+    }
+
+    #[test]
+    fn dedup_removes_normalized_duplicate_keeps_distinct() {
+        let a = section_id("a", "The router dispatches to handlers.");
+        // Same content, different whitespace/case → duplicate key.
+        let b = section_id("b", "the router   dispatches\nto handlers.");
+        let c = section_id("c", "A completely different section about caching.");
+        let mut selected = vec![&a, &b, &c];
+        dedup_selected_sections(&mut selected);
+        let ids: Vec<&str> = selected.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["a", "c"], "kept first dup + distinct, dropped b");
+    }
+
+    #[test]
+    fn dedup_key_is_whitespace_and_case_insensitive() {
+        assert_eq!(dedup_key("Foo  Bar\n baz"), dedup_key("foo bar BAZ"));
+        assert_ne!(dedup_key("foo bar"), dedup_key("foo baz"));
     }
 
     #[test]
