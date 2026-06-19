@@ -70,6 +70,18 @@ pub enum CompressionStrategy {
         /// suffix-truncated with a `"… (clipped)"` marker.
         max_string_chars: usize,
     },
+
+    /// Fold deep stack traces (Python / Node / Java / Rust backtraces).
+    /// A run of more than `max_frames` consecutive frame lines is reduced
+    /// to its first `head` and last `tail` frames with a `… N frames
+    /// omitted …` marker in between. The exception type/message lines that
+    /// surround a trace are not frame lines, so they are never touched —
+    /// only the repetitive middle of a deep trace is dropped.
+    FoldStackFrames {
+        max_frames: usize,
+        head: usize,
+        tail: usize,
+    },
 }
 
 impl CompressionStrategy {
@@ -81,6 +93,7 @@ impl CompressionStrategy {
             Self::Truncate { .. } => "truncate",
             Self::ExtractColumns { .. } => "extract_columns",
             Self::JsonStructural { .. } => "json_structural",
+            Self::FoldStackFrames { .. } => "fold_stack_frames",
         }
     }
 }
@@ -137,7 +150,16 @@ pub fn run_pipeline(command: &str, output: &str, filter: &FilterConfig) -> Compr
     if matches!(stripped, Cow::Owned(_)) {
         strategies_applied.push("strip_ansi".to_string());
     }
-    let base = stripped.into_owned();
+    // Collapse carriage-return progress overwrites (download/build bars)
+    // to their final state — same rationale as the ANSI strip: it's noise
+    // the per-filter regexes can't see past, and folding it is a real
+    // token saving. Runs after the strip so colored progress bars (escape
+    // + `\r`) collapse too.
+    let collapsed = crate::ansi::collapse_carriage_returns(&stripped);
+    if matches!(collapsed, Cow::Owned(_)) {
+        strategies_applied.push("collapse_cr".to_string());
+    }
+    let base = collapsed.into_owned();
     let mut current: Cow<str> = Cow::Borrowed(&base);
 
     for strategy in &filter.strategies {
@@ -277,7 +299,85 @@ fn apply_strategy(input: &str, strategy: &CompressionStrategy) -> String {
             keep_first_items,
             max_string_chars,
         } => json_structural(input, *keep_first_items, *max_string_chars),
+        CompressionStrategy::FoldStackFrames {
+            max_frames,
+            head,
+            tail,
+        } => fold_stack_frames(input, *max_frames, *head, *tail),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Stack-trace folding
+// ---------------------------------------------------------------------------
+
+/// True for a line that belongs to a stack trace's frame list across the
+/// common runtimes: Python (`  File "…", line N, in f`), Node/JS/Java
+/// (`    at f (…)` / `\tat pkg.C.m(F.java:N)`), and Rust backtraces
+/// (`  12: 0x… - symbol` and its `             at …:N` continuation).
+fn is_stack_frame_line(line: &str) -> bool {
+    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r#"^\s+(at\s|File\s+"|\d+:\s+0x[0-9a-fA-F]+|at\s+\S+:\d+)"#)
+            .expect("valid stack-frame regex")
+    })
+    .is_match(line)
+}
+
+/// Fold the repetitive middle of deep stack traces. Conservative: only a
+/// run of strictly more than `max_frames` consecutive frame lines is
+/// touched, and the surrounding exception message lines (which are not
+/// frame lines) are preserved verbatim. The Python code snippet printed
+/// under a `File "…"` line is kept as part of the run so a frame isn't
+/// split across the fold boundary.
+fn fold_stack_frames(input: &str, max_frames: usize, head: usize, tail: usize) -> String {
+    let lines: Vec<&str> = input.lines().collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        if !is_stack_frame_line(lines[i]) {
+            out.push(lines[i].to_string());
+            i += 1;
+            continue;
+        }
+        // Extend the run: frame lines, plus a single non-frame indented
+        // continuation line right after a Python `File "…"` (the source
+        // snippet). A blank line or a dedented line ends the run.
+        let start = i;
+        let mut j = i;
+        while j < lines.len() {
+            if is_stack_frame_line(lines[j]) {
+                j += 1;
+            } else if j > start
+                && lines[j].starts_with(char::is_whitespace)
+                && !lines[j].trim().is_empty()
+                && lines[j - 1].trim_start().starts_with("File \"")
+            {
+                j += 1; // Python source snippet under a File line
+            } else {
+                break;
+            }
+        }
+        let run = &lines[start..j];
+        let frame_count = run.iter().filter(|l| is_stack_frame_line(l)).count();
+        if frame_count > max_frames {
+            for l in &run[..head.min(run.len())] {
+                out.push((*l).to_string());
+            }
+            let omitted = frame_count.saturating_sub(head + tail);
+            out.push(format!("    … {omitted} stack frames omitted …"));
+            let tail_start = run.len().saturating_sub(tail);
+            for l in &run[tail_start.max(head.min(run.len()))..] {
+                out.push((*l).to_string());
+            }
+        } else {
+            for l in run {
+                out.push((*l).to_string());
+            }
+        }
+        i = j;
+    }
+    out.join("\n")
 }
 
 // ---------------------------------------------------------------------------
@@ -513,6 +613,44 @@ fn slice_by_header(line: &str, header_cols: &[(usize, &str)]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fold_stack_frames_folds_deep_node_trace_keeps_message() {
+        let mut s = String::from("Error: boom\n");
+        for i in 0..20 {
+            s.push_str(&format!("    at frame{i} (/app/src/file{i}.js:{i}:3)\n"));
+        }
+        s.push_str("Done");
+        let out = fold_stack_frames(&s, 8, 4, 2);
+        assert!(out.contains("Error: boom"), "message kept");
+        assert!(out.contains("at frame0"), "top frame kept");
+        assert!(out.contains("at frame19"), "bottom frame kept");
+        assert!(out.contains("frames omitted"), "middle folded");
+        assert!(!out.contains("at frame10"), "middle frame dropped");
+        assert!(out.contains("Done"), "trailing content kept");
+    }
+
+    #[test]
+    fn fold_stack_frames_leaves_short_trace_untouched() {
+        let s = "Error: x\n    at a (f.js:1:1)\n    at b (f.js:2:1)\nend";
+        assert_eq!(fold_stack_frames(s, 8, 4, 2), s);
+    }
+
+    #[test]
+    fn fold_stack_frames_folds_python_traceback() {
+        let mut s = String::from("Traceback (most recent call last):\n");
+        for i in 0..15 {
+            s.push_str(&format!("  File \"/app/m{i}.py\", line {i}, in func{i}\n"));
+            s.push_str(&format!("    return helper{i}()\n"));
+        }
+        s.push_str("ValueError: bad\n");
+        let out = fold_stack_frames(&s, 8, 4, 2);
+        assert!(out.contains("Traceback"), "header kept");
+        assert!(out.contains("ValueError: bad"), "exception kept");
+        assert!(out.contains("frames omitted"));
+        assert!(out.contains("m0.py"), "top frame kept");
+        assert!(out.contains("m14.py"), "bottom frame kept");
+    }
 
     #[test]
     fn filter_lines_removes_and_keeps() {

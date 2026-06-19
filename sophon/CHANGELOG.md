@@ -19,6 +19,25 @@ can't show — it is proven separately by a colored-input regression test).
 The envelope/accounting fixes are correctness/honesty improvements a
 recall bench does not capture.
 
+### Added
+- **`build` output filter (T2.2).** `cargo build`/`clippy`/`check`, `tsc`,
+  `eslint`, `biome`, `make`, `ninja`, `bazel`, `go build`, and `… run
+  build` scripts now route to a dedicated filter instead of the generic
+  (truncation-floored) fallback. It drops `Compiling`/`Downloading`/
+  progress noise while keeping every diagnostic (errors, warnings, the
+  `-->`/`|`/`note:` context) and the final `Finished` success line.
+  Deterministic per-command bench: `cargo build --release` 107 → 18 tokens
+  (83% saved).
+- **Carriage-return progress collapse (T2.1).** Download/build progress
+  bars that redraw a line in place with `\r` are folded to their final
+  state (CRLF line endings preserved). Runs as a pre-pass after the ANSI
+  strip.
+- **Stack-trace folding (T2.3).** A new `FoldStackFrames` strategy (wired
+  into the cargo-test, pytest and build filters) folds the repetitive
+  middle of deep Python/Node/Java/Rust traces — keeping the exception
+  message and the first/last few frames — only when a trace exceeds 8
+  frames, so short traces are untouched.
+
 ### Changed
 - **`compress_output` strips ANSI/terminal escapes up-front (T1.1).** Real
   tool output is colored, and the per-filter regexes are anchored

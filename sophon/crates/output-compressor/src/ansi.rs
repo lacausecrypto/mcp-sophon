@@ -45,9 +45,62 @@ pub fn strip_ansi(text: &str) -> std::borrow::Cow<'_, str> {
     ansi_re().replace_all(text, "")
 }
 
+/// Collapse carriage-return progress overwrites. Progress UIs (`pip`,
+/// `cargo`, `docker pull`, download bars) redraw a line in place with a
+/// bare `\r`, so a single logical line can carry dozens of intermediate
+/// states the model never needs — only the final one. We keep the segment
+/// after the last in-line `\r`. A trailing `\r` immediately before `\n`
+/// (CRLF) is a *line ending*, not an overwrite, so it is dropped without
+/// eating the line (it would otherwise blank every Windows line).
+///
+/// Returns the input borrowed unchanged when there is no `\r` at all.
+pub fn collapse_carriage_returns(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains('\r') {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut first = true;
+    for line in text.split('\n') {
+        if !first {
+            out.push('\n');
+        }
+        first = false;
+        // Drop the CR of a CRLF pair (it sits at the end of this split).
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        // Any remaining CR is an in-line overwrite: keep the last segment.
+        match line.rfind('\r') {
+            Some(pos) => out.push_str(&line[pos + 1..]),
+            None => out.push_str(line),
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collapses_progress_bar_to_final_state() {
+        let s = "Downloading\r 10%\r 50%\r 100% done\nNext line";
+        assert_eq!(collapse_carriage_returns(s), " 100% done\nNext line");
+    }
+
+    #[test]
+    fn crlf_line_endings_are_preserved_as_lines() {
+        let s = "line one\r\nline two\r\n";
+        // CRLF → LF, no content eaten.
+        assert_eq!(collapse_carriage_returns(s), "line one\nline two\n");
+    }
+
+    #[test]
+    fn no_cr_is_borrowed_untouched() {
+        let s = "plain\nlines";
+        assert!(matches!(
+            collapse_carriage_returns(s),
+            std::borrow::Cow::Borrowed(_)
+        ));
+    }
 
     #[test]
     fn strips_sgr_color_codes() {

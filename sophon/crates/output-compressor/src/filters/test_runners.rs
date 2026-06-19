@@ -13,30 +13,37 @@ pub fn cargo_test_filter() -> FilterConfig {
     FilterConfig {
         name: "cargo_test",
         command_patterns: vec![rx(r"^\s*cargo\s+test")],
-        strategies: vec![CompressionStrategy::FilterLines {
-            remove_patterns: vec![
-                rx(r"^test .+ \.\.\. ok$"),
-                rx(r"^test .+ \.\.\. ignored"),
-                rx(r"^running \d+ tests?$"),
-                rx(r"^\s*Running "),
-                rx(r"^\s*Compiling "),
-                rx(r"^\s*Finished "),
-                rx(r"^\s*Doc-tests "),
-                rx(r"^\s*$"),
-            ],
-            keep_patterns: vec![
-                rx(r"FAILED"),
-                rx(r"^test .+ \.\.\. FAILED"),
-                rx(r"^failures:"),
-                rx(r"^---- .+ ----"),
-                rx(r"thread .+ panicked"),
-                rx(r"^test result:"),
-                rx(r"^error"),
-                rx(r"^warning"),
-                rx(r"^note:"),
-                rx(r"assertion"),
-            ],
-        }],
+        strategies: vec![
+            CompressionStrategy::FoldStackFrames {
+                max_frames: 8,
+                head: 4,
+                tail: 2,
+            },
+            CompressionStrategy::FilterLines {
+                remove_patterns: vec![
+                    rx(r"^test .+ \.\.\. ok$"),
+                    rx(r"^test .+ \.\.\. ignored"),
+                    rx(r"^running \d+ tests?$"),
+                    rx(r"^\s*Running "),
+                    rx(r"^\s*Compiling "),
+                    rx(r"^\s*Finished "),
+                    rx(r"^\s*Doc-tests "),
+                    rx(r"^\s*$"),
+                ],
+                keep_patterns: vec![
+                    rx(r"FAILED"),
+                    rx(r"^test .+ \.\.\. FAILED"),
+                    rx(r"^failures:"),
+                    rx(r"^---- .+ ----"),
+                    rx(r"thread .+ panicked"),
+                    rx(r"^test result:"),
+                    rx(r"^error"),
+                    rx(r"^warning"),
+                    rx(r"^note:"),
+                    rx(r"assertion"),
+                ],
+            },
+        ],
         max_output_tokens: Some(800),
         preserve_head: 0,
         preserve_tail: 5,
@@ -47,33 +54,40 @@ pub fn pytest_filter() -> FilterConfig {
     FilterConfig {
         name: "pytest",
         command_patterns: vec![rx(r"^\s*pytest"), rx(r"^\s*python\s+-m\s+pytest")],
-        strategies: vec![CompressionStrategy::FilterLines {
-            remove_patterns: vec![
-                rx(r"^=+ test session starts =+"),
-                rx(r"^platform "),
-                rx(r"^plugins:"),
-                rx(r"^collected \d+ items"),
-                rx(r"^rootdir:"),
-                // Pytest prints "tests/foo.py::test_x PASSED [ 20% ]" —
-                // the PASSED token sits mid-line, not anchored. Match
-                // anywhere on the line.
-                rx(r"\bPASSED\b"),
-                rx(r"^\s*\.+\s*$"),
-                rx(r"^$"),
-            ],
-            keep_patterns: vec![
-                // These override the PASSED match above on the summary
-                // line (which contains both).
-                rx(r"FAILED"),
-                rx(r"ERROR"),
-                rx(r"^E\s+"),
-                rx(r"^=+ FAILURES =+"),
-                rx(r"^=+ ERRORS =+"),
-                rx(r"^=+ short test summary"),
-                rx(r"^_+ "),
-                rx(r"AssertionError"),
-            ],
-        }],
+        strategies: vec![
+            CompressionStrategy::FoldStackFrames {
+                max_frames: 8,
+                head: 4,
+                tail: 2,
+            },
+            CompressionStrategy::FilterLines {
+                remove_patterns: vec![
+                    rx(r"^=+ test session starts =+"),
+                    rx(r"^platform "),
+                    rx(r"^plugins:"),
+                    rx(r"^collected \d+ items"),
+                    rx(r"^rootdir:"),
+                    // Pytest prints "tests/foo.py::test_x PASSED [ 20% ]" —
+                    // the PASSED token sits mid-line, not anchored. Match
+                    // anywhere on the line.
+                    rx(r"\bPASSED\b"),
+                    rx(r"^\s*\.+\s*$"),
+                    rx(r"^$"),
+                ],
+                keep_patterns: vec![
+                    // These override the PASSED match above on the summary
+                    // line (which contains both).
+                    rx(r"FAILED"),
+                    rx(r"ERROR"),
+                    rx(r"^E\s+"),
+                    rx(r"^=+ FAILURES =+"),
+                    rx(r"^=+ ERRORS =+"),
+                    rx(r"^=+ short test summary"),
+                    rx(r"^_+ "),
+                    rx(r"AssertionError"),
+                ],
+            },
+        ],
         max_output_tokens: Some(800),
         preserve_head: 0,
         preserve_tail: 5,

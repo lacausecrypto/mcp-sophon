@@ -1,6 +1,7 @@
 //! Filter registry — a list of `FilterConfig`s tried in order, with a
 //! generic fallback at the end.
 
+pub mod build;
 pub mod curl_json;
 pub mod curl_verbose;
 pub mod docker;
@@ -40,6 +41,10 @@ impl FilterRegistry {
                 test_runners::pytest_filter(),
                 test_runners::vitest_filter(),
                 test_runners::go_test_filter(),
+                // Build / compile (after test runners so `cargo test`
+                // keeps its filter; before generic so build noise is
+                // dropped instead of hitting the truncation floor).
+                build::build_filter(),
                 // Filesystem
                 filesystem::ls_filter(),
                 filesystem::grep_filter(),
@@ -88,8 +93,8 @@ mod tests {
     #[test]
     fn registry_has_all_filters() {
         let r = FilterRegistry::new();
-        // 4 git + 4 tests + 3 fs + 2 docker + 2 pkg + 3 infra + 2 http + 1 generic = 21
-        assert_eq!(r.filter_count(), 21);
+        // 4 git + 4 tests + 1 build + 3 fs + 2 docker + 2 pkg + 3 infra + 2 http + 1 generic = 22
+        assert_eq!(r.filter_count(), 22);
     }
 
     #[test]
