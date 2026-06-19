@@ -7,6 +7,31 @@ comptabilité de tokens). Chaque levier cite `fichier:ligne` et précise *reprod
 
 ---
 
+## État d'exécution (2026-06-19)
+
+| Item | État | Note |
+|---|---|---|
+| T0.1 double payload | **Non fait (requalifié)** | Aucun `outputSchema` ⇒ `structuredContent` non injecté au modèle par un client conforme ; consommé en interne (benchs/tests). Le retirer casserait du code pour un gain non vérifié. |
+| T0.2 comptage delta JSON | ✅ `fad9a57` | |
+| T0.3 honnêteté fragments | ✅ `fad9a57` | |
+| T1.1 strip ANSI | ✅ `fad9a57` | prouvé par test coloré (0.98→<0.5) |
+| T1.2 hijack parser XML | ✅ `fad9a57` | |
+| T1.3 troncature query-aware | ✅ `fad9a57` | prompt recall 48.8→51.3 |
+| T2.1 collapse `\r` | ✅ `61d591e` | |
+| T2.2 filtre build | ✅ `61d591e` | cargo build 107→18 tok |
+| T2.3 repli stack traces | ✅ `61d591e` | |
+| T3.1 index conditionnel | ✅ `4299e5d` | perf (index jeté plus construit) |
+| T3.2 rolling récursif | **Déféré (raison)** | Re-résumer le brut est le choix *fidèle* en extractif déterministe ; le seul vrai gain (incrémental LLM) est hors-bench, opt-in, risqué. |
+| T3.3 relevance composants | ✅ `4299e5d` | history 32.1→32.7 |
+| T4.2 dédup sections | ✅ `d053bc8` | neutre sur le bench (corpus sans redite), gain hors-corpus |
+| T4.1 embedder/retriever défaut | **Déféré (mesure-d'abord)** | Retriever hors-chemin ; exige une **nouvelle infra de bench** sinon optimisation à l'aveugle. |
+| T4.3 prompt-caching | **Hors-scope serveur** | `cache_control` est posé par l'orchestrateur/client sur ses appels API ; un serveur MCP ne le contrôle pas. Reste une *guidance d'intégration*. |
+| T4.4 tokenizer Claude | **Déféré (faible valeur)** | Pas de tokenizer Claude open ; cl100k cohérent avec lui-même ; surtout cosmétique. |
+
+Bench final N=51 : oracle 68.7 · **sophon 43.7** · truncate 23.7 · **sophon−truncate +20.0 pts** (CI [+10.9,+29.5]). Détail : prompt 51.3 (+15.7 vs trunc) · history 32.7 (+32.7) · output 49.1 (−2.0). 480+ tests verts, clippy clean.
+
+---
+
 ## Recadrage (à lire avant d'agir)
 
 Trois faits vérifiés changent les priorités par rapport à l'intuition de départ :
