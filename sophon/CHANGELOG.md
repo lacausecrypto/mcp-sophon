@@ -3,7 +3,7 @@
 All notable changes to Sophon are documented here. Versions follow semantic
 versioning (pre-1.0: minor = features/behaviour changes, patch = fixes).
 
-## [Unreleased]
+## [0.7.0] — 2026-06-19
 
 Compression-power & token-economy pass (see `../audit19-plan.md`). Five
 verified levers from a fresh adversarial audit; every change ships with a
@@ -140,4 +140,5 @@ op −16.3 → −2.0. 448 tests green, clippy clean.
 - **Multibyte panic:** the per-section embedding input is truncated on a UTF-8
   char boundary, fixing a `[..500]` byte-slice panic on multibyte prompt text.
 
+[0.7.0]: https://github.com/lacausecrypto/mcp-sophon/releases/tag/v0.7.0
 [0.6.0]: https://github.com/lacausecrypto/mcp-sophon/releases/tag/v0.6.0
