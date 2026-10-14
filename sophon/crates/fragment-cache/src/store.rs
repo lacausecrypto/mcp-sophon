@@ -127,7 +127,7 @@ impl FragmentStore {
         }
 
         let mut list = self.fragments.values().cloned().collect::<Vec<_>>();
-        list.sort_by(|a, b| b.use_count.cmp(&a.use_count));
+        list.sort_by_key(|a| std::cmp::Reverse(a.use_count));
         let raw = serde_json::to_string_pretty(&list).unwrap_or_else(|_| "[]".to_string());
         fs::write(&self.storage_path, raw)
     }
@@ -170,13 +170,17 @@ impl FragmentStore {
         self.fragments.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.fragments.is_empty()
+    }
+
     fn evict_if_needed(&mut self) {
         if self.fragments.len() <= self.max_fragments {
             return;
         }
 
         let mut fragments = self.fragments.values().cloned().collect::<Vec<_>>();
-        fragments.sort_by(|a, b| a.last_used.cmp(&b.last_used));
+        fragments.sort_by_key(|a| a.last_used);
 
         while self.fragments.len() > self.max_fragments {
             if let Some(fragment) = fragments.first() {
