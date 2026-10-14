@@ -960,16 +960,19 @@ mod path_security_tests {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("workspace");
         fs::create_dir(&root).unwrap();
+        // macOS resolves /var to /private/var; Windows may add a verbatim prefix.
+        // The helper deliberately returns canonical paths on all platforms.
+        let canonical_root = fs::canonicalize(&root).unwrap();
         let existing = root.join("source.rs");
         fs::write(&existing, "fn main() {}").unwrap();
         assert_eq!(
             authorize_path_with_root(&existing, &root).unwrap(),
-            existing
+            canonical_root.join("source.rs")
         );
         let new_file = root.join("new.rs");
         assert_eq!(
             authorize_path_with_root(&new_file, &root).unwrap(),
-            new_file
+            canonical_root.join("new.rs")
         );
     }
 
