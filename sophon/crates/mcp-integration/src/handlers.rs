@@ -124,7 +124,11 @@ fn authorize_path(path: &std::path::Path) -> anyhow::Result<PathBuf> {
     let Ok(root) = std::env::var("SOPHON_ALLOWED_ROOT") else {
         return Ok(path.to_path_buf());
     };
-    let root = std::fs::canonicalize(&root)?;
+    authorize_path_with_root(path, std::path::Path::new(&root))
+}
+
+fn authorize_path_with_root(path: &std::path::Path, root: &std::path::Path) -> anyhow::Result<PathBuf> {
+    let root = std::fs::canonicalize(root)?;
     let candidate = if path.exists() {
         std::fs::canonicalize(path)?
     } else {
@@ -933,4 +937,55 @@ fn run_retrieval(
         payload["tail_summary"] = json!(summary);
     }
     Ok(Some(payload))
+}
+
+#[cfg(test)]
+mod path_security_tests {
+    use super::authorize_path_with_root;
+    use std::fs;
+
+    #[test]
+    fn rejects_existing_file_outside_allowed_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        fs::create_dir(&root).unwrap();
+        let outside = temp.path().join("secret.txt");
+        fs::write(&outside, "private").unwrap();
+        assert!(authorize_path_with_root(&outside, &root).is_err());
+    }
+
+    #[test]
+    fn accepts_existing_and_new_files_within_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        fs::create_dir(&root).unwrap();
+        let existing = root.join("source.rs");
+        fs::write(&existing, "fn main() {}").unwrap();
+        assert_eq!(authorize_path_with_root(&existing, &root).unwrap(), existing);
+        let new_file = root.join("new.rs");
+        assert_eq!(authorize_path_with_root(&new_file, &root).unwrap(), new_file);
+    }
+
+    #[test]
+    fn rejects_parent_traversal_for_new_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        fs::create_dir(&root).unwrap();
+        let traversal = root.join("..").join("outside.txt");
+        assert!(authorize_path_with_root(&traversal, &root).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_to_outside_file() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        fs::create_dir(&root).unwrap();
+        let outside = temp.path().join("secret.txt");
+        fs::write(&outside, "private").unwrap();
+        let link = root.join("linked.txt");
+        symlink(&outside, &link).unwrap();
+        assert!(authorize_path_with_root(&link, &root).is_err());
+    }
 }
