@@ -45,7 +45,7 @@ pub fn encode_content(
     let mut replaced_tokens = 0usize;
 
     let mut stored_fragments = store.iter().collect::<Vec<_>>();
-    stored_fragments.sort_by(|a, b| b.token_count.cmp(&a.token_count));
+    stored_fragments.sort_by_key(|a| std::cmp::Reverse(a.token_count));
 
     // Detect new fragments up front so we can apply them on the SAME call
     // (previously the first call was always a no-op: store empty → nothing
@@ -64,7 +64,7 @@ pub fn encode_content(
     // so we don't clone Fragments twice.
     let mut all_fragments: Vec<&Fragment> = stored_fragments;
     all_fragments.extend(new_fragments.iter());
-    all_fragments.sort_by(|a, b| b.token_count.cmp(&a.token_count));
+    all_fragments.sort_by_key(|a| std::cmp::Reverse(a.token_count));
 
     for fragment in all_fragments {
         if !result.contains(&fragment.content) {
