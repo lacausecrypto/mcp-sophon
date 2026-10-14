@@ -127,7 +127,10 @@ fn authorize_path(path: &std::path::Path) -> anyhow::Result<PathBuf> {
     authorize_path_with_root(path, std::path::Path::new(&root))
 }
 
-fn authorize_path_with_root(path: &std::path::Path, root: &std::path::Path) -> anyhow::Result<PathBuf> {
+fn authorize_path_with_root(
+    path: &std::path::Path,
+    root: &std::path::Path,
+) -> anyhow::Result<PathBuf> {
     let root = std::fs::canonicalize(root)?;
     let candidate = if path.exists() {
         std::fs::canonicalize(path)?
@@ -961,9 +964,15 @@ mod path_security_tests {
         fs::create_dir(&root).unwrap();
         let existing = root.join("source.rs");
         fs::write(&existing, "fn main() {}").unwrap();
-        assert_eq!(authorize_path_with_root(&existing, &root).unwrap(), existing);
+        assert_eq!(
+            authorize_path_with_root(&existing, &root).unwrap(),
+            existing
+        );
         let new_file = root.join("new.rs");
-        assert_eq!(authorize_path_with_root(&new_file, &root).unwrap(), new_file);
+        assert_eq!(
+            authorize_path_with_root(&new_file, &root).unwrap(),
+            new_file
+        );
     }
 
     #[test]
