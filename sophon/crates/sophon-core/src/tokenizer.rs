@@ -80,17 +80,12 @@ impl Tokenizer for TiktokenTokenizer {
 /// let tok = TokenizerBackend::default().build();
 /// assert!(tok.count("hello world") > 0);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TokenizerBackend {
+    #[default]
     Cl100kBase,
     O200kBase,
     P50kBase,
-}
-
-impl Default for TokenizerBackend {
-    fn default() -> Self {
-        Self::Cl100kBase
-    }
 }
 
 impl TokenizerBackend {
