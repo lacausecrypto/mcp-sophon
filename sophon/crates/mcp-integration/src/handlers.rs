@@ -118,6 +118,26 @@ struct StatsArgs {
     period: Option<String>,
 }
 
+
+/// Restrict filesystem tools to an explicitly configured workspace.
+/// The opt-in boundary preserves existing trusted local usage.
+fn authorize_path(path: &std::path::Path) -> anyhow::Result<PathBuf> {
+    let Ok(root) = std::env::var("SOPHON_ALLOWED_ROOT") else {
+        return Ok(path.to_path_buf());
+    };
+    let root = std::fs::canonicalize(&root)?;
+    let candidate = if path.exists() {
+        std::fs::canonicalize(path)?
+    } else {
+        let parent = path.parent().filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let parent = std::fs::canonicalize(parent)?;
+        parent.join(path.file_name().ok_or_else(|| anyhow::anyhow!("missing filename"))?)
+    };
+    anyhow::ensure!(candidate.starts_with(&root), "path outside SOPHON_ALLOWED_ROOT");
+    Ok(candidate)
+}
+
 pub fn handle_tool_call(
     server: &mut SophonServer,
     name: &str,
@@ -361,8 +381,9 @@ pub fn handle_tool_call(
         }
         "read_file_delta" => {
             let args: ReadFileDeltaArgs = serde_json::from_value(arguments)?;
+            let safe_path = authorize_path(std::path::Path::new(&args.path))?;
             let response = server.delta_streamer.read_file_delta(
-                PathBuf::from(&args.path),
+                safe_path.clone(),
                 args.known_version,
                 args.known_hash.as_deref(),
             )?;
@@ -374,7 +395,7 @@ pub fn handle_tool_call(
             let full_tokens = server
                 .delta_streamer
                 .state_store()
-                .get(&PathBuf::from(&args.path))
+                .get(&safe_path)
                 .map(|s| s.token_count);
             let (orig, compressed) = match &response {
                 FileReadResponse::Full { token_count, .. } => (*token_count, *token_count),
@@ -389,8 +410,9 @@ pub fn handle_tool_call(
         }
         "write_file_delta" => {
             let args: WriteFileDeltaArgs = serde_json::from_value(arguments)?;
+            let safe_path = authorize_path(std::path::Path::new(&args.path))?;
             let response = server.delta_streamer.write_file_delta(FileWriteRequest {
-                path: PathBuf::from(args.path),
+                path: safe_path,
                 changes: args.changes,
             })?;
             Ok(serde_json::to_value(response)?)
@@ -446,7 +468,7 @@ pub fn handle_tool_call(
 
             // Resolve the root: explicit arg > cached root.
             let root_to_scan = match args.root.as_deref() {
-                Some(p) => Some(std::path::PathBuf::from(p)),
+                Some(p) => Some(authorize_path(std::path::Path::new(p))?),
                 None => server.codebase_navigator.root().cloned(),
             };
 
