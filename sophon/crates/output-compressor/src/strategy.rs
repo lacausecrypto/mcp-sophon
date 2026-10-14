@@ -282,10 +282,10 @@ fn compress_json_value(
             }
         }
         Value::String(s) if max_string_chars > 0 && s.chars().count() > max_string_chars => {
-                // Use char-aware truncation to avoid splitting a
-                // multi-byte UTF-8 sequence.
-                let prefix: String = s.chars().take(max_string_chars).collect();
-                *s = format!("{prefix}… (clipped, original {} chars)", s.chars().count());
+            // Use char-aware truncation to avoid splitting a
+            // multi-byte UTF-8 sequence.
+            let prefix: String = s.chars().take(max_string_chars).collect();
+            *s = format!("{prefix}… (clipped, original {} chars)", s.chars().count());
         }
         _ => {}
     }
