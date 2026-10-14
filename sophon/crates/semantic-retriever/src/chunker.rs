@@ -406,8 +406,8 @@ fn detect_topic_breaks(sentences: &[String]) -> HashSet<usize> {
         return breaks;
     }
     let mut prev_words = word_set(&sentences[0]);
-    for i in 1..sentences.len() {
-        let cur_words = word_set(&sentences[i]);
+    for (i, sentence) in sentences.iter().enumerate().skip(1) {
+        let cur_words = word_set(sentence);
         if jaccard(&prev_words, &cur_words) < 0.3 {
             breaks.insert(i);
         }
@@ -598,8 +598,10 @@ pub fn chunk_id(content: &str) -> String {
 /// in a message dated 2023-10-13 should resolve to "September 2023"
 /// but the chunk stored the raw "last month" which didn't match
 /// date-oriented queries.
+type TemporalPattern = (Regex, Box<dyn Fn(DateTime<Utc>) -> String + Send + Sync>);
+
 fn resolve_temporal_refs(text: &str, timestamp: DateTime<Utc>) -> String {
-    static PATTERNS: Lazy<Vec<(Regex, Box<dyn Fn(DateTime<Utc>) -> String + Send + Sync>)>> =
+    static PATTERNS: Lazy<Vec<TemporalPattern>> =
         Lazy::new(|| {
             vec![
                 (
