@@ -41,7 +41,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --keep-going -- -D warnings
 
       # Continue tests and the release build after a lint failure so each
       # failing CI run reports actionable diagnostics from all stages.
