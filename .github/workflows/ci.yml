@@ -14,6 +14,18 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  fmt:
+    name: Rust formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: cargo fmt --check
+        working-directory: sophon
+        run: cargo fmt --all -- --check
+
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -36,9 +48,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: sophon
-
-      - name: cargo fmt --check
-        run: cargo fmt --all -- --check
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --keep-going -- -D warnings
