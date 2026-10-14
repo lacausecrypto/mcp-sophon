@@ -129,7 +129,7 @@ fn detect_repeated_patterns(content: &str, min_tokens: usize) -> Vec<DetectedFra
 
     // Dedup overlapping candidates: prefer the largest block, drop any candidate
     // that is wholly contained in an already-kept block (and vice versa).
-    candidates.sort_by(|a, b| b.1.cmp(&a.1));
+    candidates.sort_by_key(|a| std::cmp::Reverse(a.1));
     let mut kept: Vec<(String, usize)> = Vec::new();
     for (block, tokens) in candidates {
         let overlaps = kept
