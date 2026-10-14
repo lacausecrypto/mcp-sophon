@@ -101,7 +101,7 @@ pub fn analyze_query(query: &str, history: Option<&[ConversationMessage]>) -> Qu
     }
 
     let mut scored_topics = topic_scores.into_iter().collect::<Vec<_>>();
-    scored_topics.sort_by(|a, b| b.1.cmp(&a.1));
+    scored_topics.sort_by_key(|a| std::cmp::Reverse(a.1));
 
     let mut topics = scored_topics
         .iter()
