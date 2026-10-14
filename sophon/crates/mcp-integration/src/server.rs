@@ -80,8 +80,10 @@ impl SophonServer {
         let retriever = match std::env::var("SOPHON_RETRIEVER_PATH") {
             Ok(raw) => {
                 let dir = expand_tilde(&raw);
-                let mut rcfg = RetrieverConfig::default();
-                rcfg.storage_path = dir.join("chunks.jsonl");
+                let mut rcfg = RetrieverConfig {
+                    storage_path: dir.join("chunks.jsonl"),
+                    ..RetrieverConfig::default()
+                };
                 // Multi-hop retrieval: activated via SOPHON_MULTIHOP=1
                 rcfg.multihop = std::env::var("SOPHON_MULTIHOP")
                     .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -99,14 +101,14 @@ impl SophonServer {
                 // more informative.
                 if let Ok(v) = std::env::var("SOPHON_CHUNK_TARGET") {
                     if let Ok(n) = v.parse::<usize>() {
-                        if n >= 32 && n <= 4000 {
+                        if (32..=4000).contains(&n) {
                             rcfg.chunk_config.target_size = n;
                         }
                     }
                 }
                 if let Ok(v) = std::env::var("SOPHON_CHUNK_MAX") {
                     if let Ok(n) = v.parse::<usize>() {
-                        if n >= rcfg.chunk_config.target_size && n <= 8000 {
+                        if (rcfg.chunk_config.target_size..=8000).contains(&n) {
                             rcfg.chunk_config.max_size = n;
                         }
                     }
@@ -642,7 +644,7 @@ impl StatsCollector {
         let entry = self
             .per_module
             .entry(module.to_string())
-            .or_insert_with(ModuleStats::default);
+            .or_default();
         entry.calls += 1;
         entry.original_tokens += original_tokens as u64;
         entry.compressed_tokens += compressed_tokens as u64;
