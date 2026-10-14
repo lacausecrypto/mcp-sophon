@@ -641,10 +641,7 @@ fn expand_tilde(path: &str) -> std::path::PathBuf {
 
 impl StatsCollector {
     pub fn record(&mut self, module: &str, original_tokens: usize, compressed_tokens: usize) {
-        let entry = self
-            .per_module
-            .entry(module.to_string())
-            .or_default();
+        let entry = self.per_module.entry(module.to_string()).or_default();
         entry.calls += 1;
         entry.original_tokens += original_tokens as u64;
         entry.compressed_tokens += compressed_tokens as u64;
