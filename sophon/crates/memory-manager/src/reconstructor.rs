@@ -31,6 +31,6 @@ pub fn expand_memory(
         }
     }
 
-    selected.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+    selected.sort_by_key(|a| a.timestamp);
     selected
 }
