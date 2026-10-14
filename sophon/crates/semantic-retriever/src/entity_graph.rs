@@ -316,8 +316,8 @@ impl EntityGraph {
         // a dog" with "Shadow came home on May 5" — the two chunks share
         // the non-query entity "dog" (or Shadow itself as a bridge).
         let top_hit_coverage = scores
-            .iter()
-            .map(|(chunk_id, _)| {
+            .keys()
+            .map(|chunk_id| {
                 self.chunk_to_entities
                     .get(chunk_id)
                     .map(|es| es.intersection(&query_set).count())
@@ -325,7 +325,7 @@ impl EntityGraph {
             })
             .max()
             .unwrap_or(0);
-        let target_coverage = (query_set.len() + 1) / 2;
+        let target_coverage = query_set.len().div_ceil(2);
 
         if top_hit_coverage < target_coverage && !query_set.is_empty() {
             // Pick up to 5 best direct chunks as bridges.
