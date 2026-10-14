@@ -855,9 +855,7 @@ fn run_retrieval(
                 // Preserve any candidates past the reranked window — they
                 // still matter for the tail-summary step below, even if
                 // they don't make the top_k.
-                for i in n..fused.len() {
-                    reranked.push(fused[i].clone());
-                }
+                reranked.extend(fused.iter().skip(n).cloned());
                 reranked
             }
             None => fused,
