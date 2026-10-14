@@ -118,7 +118,6 @@ struct StatsArgs {
     period: Option<String>,
 }
 
-
 /// Restrict filesystem tools to an explicitly configured workspace.
 /// The opt-in boundary preserves existing trusted local usage.
 fn authorize_path(path: &std::path::Path) -> anyhow::Result<PathBuf> {
@@ -134,9 +133,15 @@ fn authorize_path(path: &std::path::Path) -> anyhow::Result<PathBuf> {
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or_else(|| std::path::Path::new("."));
         let parent = std::fs::canonicalize(parent)?;
-        parent.join(path.file_name().ok_or_else(|| anyhow::anyhow!("missing filename"))?)
+        parent.join(
+            path.file_name()
+                .ok_or_else(|| anyhow::anyhow!("missing filename"))?,
+        )
     };
-    anyhow::ensure!(candidate.starts_with(&root), "path outside SOPHON_ALLOWED_ROOT");
+    anyhow::ensure!(
+        candidate.starts_with(&root),
+        "path outside SOPHON_ALLOWED_ROOT"
+    );
     Ok(candidate)
 }
 
