@@ -129,7 +129,9 @@ fn authorize_path(path: &std::path::Path) -> anyhow::Result<PathBuf> {
     let candidate = if path.exists() {
         std::fs::canonicalize(path)?
     } else {
-        let parent = path.parent().filter(|p| !p.as_os_str().is_empty())
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or_else(|| std::path::Path::new("."));
         let parent = std::fs::canonicalize(parent)?;
         parent.join(path.file_name().ok_or_else(|| anyhow::anyhow!("missing filename"))?)
