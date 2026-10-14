@@ -14,10 +14,9 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const https = require('https');
-const zlib = require('zlib');
 const { execSync } = require('child_process');
 
-const REPO = process.env.SOPHON_REPO || 'lacausecrypto/mcp-sophon';
+const REPO = 'lacausecrypto/mcp-sophon';
 const pkg = require('./package.json');
 const VERSION = `v${pkg.version}`;
 
@@ -103,16 +102,13 @@ async function main() {
     const shaBuf = await get(sha256Url);
     expectedSha = shaBuf.toString('utf8').trim().split(/\s+/)[0].toLowerCase();
   } catch (e) {
-    console.warn(`[sophon] WARNING: no .sha256 file at ${sha256Url} — skipping verification`);
+    fail(`required SHA-256 checksum unavailable at ${sha256Url}: ${e.message}`);
   }
 
-  if (expectedSha) {
-    const actual = sha256(archive);
-    if (actual !== expectedSha) {
-      fail(`checksum mismatch: expected ${expectedSha}, got ${actual}`);
-    }
-    console.log(`[sophon] sha256 verified: ${expectedSha}`);
-  }
+  if (!/^[0-9a-f]{64}$/.test(expectedSha)) fail('invalid SHA-256 checksum format');
+  const actual = sha256(archive);
+  if (actual !== expectedSha) fail(`checksum mismatch: expected ${expectedSha}, got ${actual}`);
+  console.log(`[sophon] sha256 verified: ${expectedSha}`);
 
   // Extract the archive. For tar.gz we prefer the system tar to avoid adding a
   // dependency; for .zip on Windows we shell out to PowerShell's Expand-Archive.
