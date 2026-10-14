@@ -975,7 +975,7 @@ mod tests {
     #[test]
     fn chunker_keeps_distinct_tool_calls_distinct() {
         // Same tool, DIFFERENT args — must remain 2 separate chunks.
-        let calls = vec![
+        let calls = [
             r#"{"type":"tool_use","name":"read_file","input":{"path":"a.rs"}}"#,
             r#"{"type":"tool_use","name":"read_file","input":{"path":"b.rs"}}"#,
         ];

@@ -134,12 +134,14 @@ fn run_codebase_scan(args: &[String]) -> anyhow::Result<()> {
 
     let t0 = Instant::now();
     let scan_result = nav
-        .scan(&std::path::PathBuf::from(&root))
+        .scan(std::path::PathBuf::from(&root))
         .map_err(|e| anyhow::anyhow!("scan failed: {}", e))?;
     let scan_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
-    let mut dcfg = DigestConfig::default();
-    dcfg.max_tokens = max_tokens;
+    let dcfg = DigestConfig {
+        max_tokens,
+        ..DigestConfig::default()
+    };
     let t1 = Instant::now();
     let digest = nav.digest(query.as_deref(), &dcfg);
     let digest_ms = t1.elapsed().as_secs_f64() * 1000.0;
@@ -312,7 +314,7 @@ fn run_hook(args: &[String]) -> anyhow::Result<()> {
                 RewriteResult::Passthrough(c) => {
                     println!(
                         "{}",
-                        json!({"action": "passthrough", "command": c}).to_string()
+                        json!({"action": "passthrough", "command": c})
                     );
                 }
                 RewriteResult::Rewritten {
@@ -328,7 +330,6 @@ fn run_hook(args: &[String]) -> anyhow::Result<()> {
                             "command": rewritten,
                             "rule": rule,
                         })
-                        .to_string()
                     );
                 }
             }

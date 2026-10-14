@@ -143,7 +143,7 @@ mod tests {
         // With k=1: rank1 = 1/2 = 0.5, rank2 = 1/3 ≈ 0.333.
         // With k=60: rank1 = 1/61, rank2 = 1/62 — much closer.
         let r = vec![mk("a", 1.0), mk("b", 0.9)];
-        let small_k = rrf_fuse(&[r.clone()], 1.0);
+        let small_k = rrf_fuse(std::slice::from_ref(&r), 1.0);
         let big_k = rrf_fuse(&[r], 60.0);
         let small_gap = small_k[0].score - small_k[1].score;
         let big_gap = big_k[0].score - big_k[1].score;
