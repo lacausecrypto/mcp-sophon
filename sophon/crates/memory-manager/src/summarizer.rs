@@ -326,7 +326,7 @@ fn format_transcript(messages: &[Message]) -> String {
             Role::Assistant => "Assistant",
             Role::System => "System",
         };
-        transcript.push_str(&format!("{}: {}\n", role_tag, &msg.content));
+        transcript.push_str(&format!("{}: {}\n", role_tag, msg.content));
     }
     transcript
 }
