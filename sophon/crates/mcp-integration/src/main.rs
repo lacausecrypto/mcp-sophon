@@ -312,10 +312,7 @@ fn run_hook(args: &[String]) -> anyhow::Result<()> {
 
             match rewriter.rewrite(&cmd) {
                 RewriteResult::Passthrough(c) => {
-                    println!(
-                        "{}",
-                        json!({"action": "passthrough", "command": c})
-                    );
+                    println!("{}", json!({"action": "passthrough", "command": c}));
                 }
                 RewriteResult::Rewritten {
                     original,
