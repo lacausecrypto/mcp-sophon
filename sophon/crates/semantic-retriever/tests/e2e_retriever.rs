@@ -33,10 +33,11 @@ fn msg<'a>(index: usize, role: ChunkInputRole, content: &'a str) -> ChunkInputMe
 }
 
 fn cfg_with_path(path: std::path::PathBuf) -> RetrieverConfig {
-    let mut cfg = RetrieverConfig::default();
-    cfg.storage_path = path;
-    cfg.min_score = 0.0; // deterministic tests — don't filter by score
-    cfg
+    RetrieverConfig {
+        storage_path: path,
+        min_score: 0.0, // deterministic tests — don't filter by score
+        ..RetrieverConfig::default()
+    }
 }
 
 #[test]
