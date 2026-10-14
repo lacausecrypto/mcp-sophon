@@ -169,9 +169,7 @@ pub fn run_pipeline(command: &str, output: &str, filter: &FilterConfig) -> Compr
     let ratio = if original_tokens == 0 {
         1.0
     } else {
-        (compressed_tokens as f32 / original_tokens as f32)
-            .min(1.0)
-            .max(0.0)
+        (compressed_tokens as f32 / original_tokens as f32).clamp(0.0, 1.0)
     };
 
     CompressionResult {
@@ -283,13 +281,11 @@ fn compress_json_value(
                 compress_json_value(child, keep_first_items, max_string_chars);
             }
         }
-        Value::String(s) => {
-            if max_string_chars > 0 && s.chars().count() > max_string_chars {
+        Value::String(s) if max_string_chars > 0 && s.chars().count() > max_string_chars => {
                 // Use char-aware truncation to avoid splitting a
                 // multi-byte UTF-8 sequence.
                 let prefix: String = s.chars().take(max_string_chars).collect();
                 *s = format!("{prefix}… (clipped, original {} chars)", s.chars().count());
-            }
         }
         _ => {}
     }
