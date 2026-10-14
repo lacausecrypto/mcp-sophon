@@ -705,9 +705,7 @@ fn resolve_temporal_refs(text: &str, timestamp: DateTime<Utc>) -> String {
             ),
             (
                 Regex::new(r"(?i)\brecently\b").unwrap(),
-                Box::new(|ts: DateTime<Utc>| {
-                    format!("recently [around {}]", ts.format("%Y-%m"))
-                }),
+                Box::new(|ts: DateTime<Utc>| format!("recently [around {}]", ts.format("%Y-%m"))),
             ),
         ]
     });
