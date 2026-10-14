@@ -601,117 +601,116 @@ pub fn chunk_id(content: &str) -> String {
 type TemporalPattern = (Regex, Box<dyn Fn(DateTime<Utc>) -> String + Send + Sync>);
 
 fn resolve_temporal_refs(text: &str, timestamp: DateTime<Utc>) -> String {
-    static PATTERNS: Lazy<Vec<TemporalPattern>> =
-        Lazy::new(|| {
-            vec![
-                (
-                    Regex::new(r"(?i)\byesterday\b").unwrap(),
-                    Box::new(|ts: DateTime<Utc>| {
-                        let d = ts - Duration::days(1);
-                        format!("yesterday [{}]", d.format("%Y-%m-%d"))
-                    }) as Box<dyn Fn(DateTime<Utc>) -> String + Send + Sync>,
-                ),
-                (
-                    Regex::new(r"(?i)\blast week\b").unwrap(),
-                    Box::new(|ts: DateTime<Utc>| {
-                        let d = ts - Duration::weeks(1);
-                        format!("last week [week of {}]", d.format("%Y-%m-%d"))
-                    }),
-                ),
-                (
-                    Regex::new(r"(?i)\blast month\b").unwrap(),
-                    Box::new(|ts: DateTime<Utc>| {
-                        let d = ts - Duration::days(30);
-                        let month_names = [
-                            "",
-                            "January",
-                            "February",
-                            "March",
-                            "April",
-                            "May",
-                            "June",
-                            "July",
-                            "August",
-                            "September",
-                            "October",
-                            "November",
-                            "December",
-                        ];
-                        format!(
-                            "last month [{} {}]",
-                            month_names[d.month() as usize],
-                            d.year()
-                        )
-                    }),
-                ),
-                (
-                    Regex::new(r"(?i)\blast year\b").unwrap(),
-                    Box::new(|ts: DateTime<Utc>| format!("last year [{}]", ts.year() - 1)),
-                ),
-                (
-                    Regex::new(r"(?i)\bthis week\b").unwrap(),
-                    Box::new(|ts: DateTime<Utc>| {
-                        format!("this week [week of {}]", ts.format("%Y-%m-%d"))
-                    }),
-                ),
-                (
-                    Regex::new(r"(?i)\bthis month\b").unwrap(),
-                    Box::new(|ts: DateTime<Utc>| {
-                        let month_names = [
-                            "",
-                            "January",
-                            "February",
-                            "March",
-                            "April",
-                            "May",
-                            "June",
-                            "July",
-                            "August",
-                            "September",
-                            "October",
-                            "November",
-                            "December",
-                        ];
-                        format!(
-                            "this month [{} {}]",
-                            month_names[ts.month() as usize],
-                            ts.year()
-                        )
-                    }),
-                ),
-                (
-                    Regex::new(r"(?i)\btoday\b").unwrap(),
-                    Box::new(|ts: DateTime<Utc>| format!("today [{}]", ts.format("%Y-%m-%d"))),
-                ),
-                (
-                    Regex::new(r"(?i)\btomorrow\b").unwrap(),
-                    Box::new(|ts: DateTime<Utc>| {
-                        let d = ts + Duration::days(1);
-                        format!("tomorrow [{}]", d.format("%Y-%m-%d"))
-                    }),
-                ),
-                (
-                    Regex::new(r"(?i)\blast friday\b").unwrap(),
-                    Box::new(|ts: DateTime<Utc>| {
-                        // Walk back to the most recent Friday before ts
-                        let weekday = ts.weekday().num_days_from_monday(); // Mon=0..Sun=6
-                        let days_back = if weekday >= 4 {
-                            weekday - 4
-                        } else {
-                            weekday + 3
-                        };
-                        let d = ts - Duration::days(days_back as i64);
-                        format!("last Friday [{}]", d.format("%Y-%m-%d"))
-                    }),
-                ),
-                (
-                    Regex::new(r"(?i)\brecently\b").unwrap(),
-                    Box::new(|ts: DateTime<Utc>| {
-                        format!("recently [around {}]", ts.format("%Y-%m"))
-                    }),
-                ),
-            ]
-        });
+    static PATTERNS: Lazy<Vec<TemporalPattern>> = Lazy::new(|| {
+        vec![
+             (
+                 Regex::new(r"(?i)\byesterday\b").unwrap(),
+                 Box::new(|ts: DateTime<Utc>| {
+                     let d = ts - Duration::days(1);
+                     format!("yesterday [{}]", d.format("%Y-%m-%d"))
+                 }) as Box<dyn Fn(DateTime<Utc>) -> String + Send + Sync>,
+             ),
+             (
+                 Regex::new(r"(?i)\blast week\b").unwrap(),
+                 Box::new(|ts: DateTime<Utc>| {
+                     let d = ts - Duration::weeks(1);
+                     format!("last week [week of {}]", d.format("%Y-%m-%d"))
+                 }),
+             ),
+             (
+                 Regex::new(r"(?i)\blast month\b").unwrap(),
+                 Box::new(|ts: DateTime<Utc>| {
+                     let d = ts - Duration::days(30);
+                     let month_names = [
+                         "",
+                         "January",
+                         "February",
+                         "March",
+                         "April",
+                         "May",
+                         "June",
+                         "July",
+                         "August",
+                         "September",
+                         "October",
+                         "November",
+                         "December",
+                     ];
+                     format!(
+                         "last month [{} {}]",
+                         month_names[d.month() as usize],
+                         d.year()
+                     )
+                 }),
+             ),
+             (
+                 Regex::new(r"(?i)\blast year\b").unwrap(),
+                 Box::new(|ts: DateTime<Utc>| format!("last year [{}]", ts.year() - 1)),
+             ),
+             (
+                 Regex::new(r"(?i)\bthis week\b").unwrap(),
+                 Box::new(|ts: DateTime<Utc>| {
+                     format!("this week [week of {}]", ts.format("%Y-%m-%d"))
+                 }),
+             ),
+             (
+                 Regex::new(r"(?i)\bthis month\b").unwrap(),
+                 Box::new(|ts: DateTime<Utc>| {
+                     let month_names = [
+                         "",
+                         "January",
+                         "February",
+                         "March",
+                         "April",
+                         "May",
+                         "June",
+                         "July",
+                         "August",
+                         "September",
+                         "October",
+                         "November",
+                         "December",
+                     ];
+                     format!(
+                         "this month [{} {}]",
+                         month_names[ts.month() as usize],
+                         ts.year()
+                     )
+                 }),
+             ),
+             (
+                 Regex::new(r"(?i)\btoday\b").unwrap(),
+                 Box::new(|ts: DateTime<Utc>| format!("today [{}]", ts.format("%Y-%m-%d"))),
+             ),
+             (
+                 Regex::new(r"(?i)\btomorrow\b").unwrap(),
+                 Box::new(|ts: DateTime<Utc>| {
+                     let d = ts + Duration::days(1);
+                     format!("tomorrow [{}]", d.format("%Y-%m-%d"))
+                 }),
+             ),
+             (
+                 Regex::new(r"(?i)\blast friday\b").unwrap(),
+                 Box::new(|ts: DateTime<Utc>| {
+                     // Walk back to the most recent Friday before ts
+                     let weekday = ts.weekday().num_days_from_monday(); // Mon=0..Sun=6
+                     let days_back = if weekday >= 4 {
+                         weekday - 4
+                     } else {
+                         weekday + 3
+                     };
+                     let d = ts - Duration::days(days_back as i64);
+                     format!("last Friday [{}]", d.format("%Y-%m-%d"))
+                 }),
+             ),
+             (
+                 Regex::new(r"(?i)\brecently\b").unwrap(),
+                 Box::new(|ts: DateTime<Utc>| {
+                     format!("recently [around {}]", ts.format("%Y-%m"))
+                 }),
+             ),
+         ]
+    });
 
     let mut result = text.to_string();
     for (re, resolver) in PATTERNS.iter() {
