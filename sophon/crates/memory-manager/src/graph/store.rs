@@ -59,8 +59,10 @@ impl GraphStore {
     /// path is remembered for later `save()` calls.
     pub fn open<P: Into<PathBuf>>(path: P) -> Result<Self, GraphStoreError> {
         let path = path.into();
-        let mut store = Self::default();
-        store.path = Some(path.clone());
+        let mut store = Self {
+            path: Some(path.clone()),
+            ..Self::default()
+        };
         if path.exists() {
             let raw = fs::read_to_string(&path)?;
             if !raw.trim().is_empty() {
