@@ -82,8 +82,8 @@ impl VectorIndex {
             let mut s = 0.0f32;
             // Manual loop unrolling helps a tiny bit on CPU; stick to the
             // straightforward version for clarity.
-            for d in 0..self.dim {
-                s += query[d] * self.vectors[start + d];
+            for (a, b) in query.iter().zip(&self.vectors[start..start + self.dim]) {
+                s += a * b;
             }
             scored.push((i, s));
         }
