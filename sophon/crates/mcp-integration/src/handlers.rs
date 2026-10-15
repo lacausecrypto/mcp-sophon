@@ -586,14 +586,26 @@ pub(crate) fn run_navigate_codebase(
         anyhow::anyhow!("navigate_codebase: no root provided and no cached scan available")
     })?;
 
-    // Do not mutate the cached state if cancellation occurred while
-    // validating the path. A scan itself is not interrupted mid-mutation.
+    // Reject invalid/nonexistent directories instead of silently replacing a
+    // valid cache with an empty "fresh" scan. Keep the existing cache intact.
+    anyhow::ensure!(
+        root.is_dir(),
+        "navigate_codebase: root is not an existing directory"
+    );
     check_cancel(cancellation)?;
-    if args.force_rescan {
-        navigator.reset();
-    }
 
-    let scan_result = navigator
+    // A forced scan is staged in a fresh navigator and only committed after
+    // its scan and digest succeed and the request is still active. This makes
+    // invalid paths, IO failures, and cancellation safe for the old cache.
+    let mut staged = args
+        .force_rescan
+        .then(|| codebase_navigator::Navigator::new(navigator.config().clone()));
+    let active = match staged.as_mut() {
+        Some(fresh) => fresh,
+        None => navigator,
+    };
+
+    let scan_result = active
         .scan(&root)
         .map_err(|err| anyhow::anyhow!("scan failed: {}", err))?;
     check_cancel(cancellation)?;
@@ -602,10 +614,10 @@ pub(crate) fn run_navigate_codebase(
     if let Some(max_tokens) = args.max_tokens {
         dcfg.max_tokens = max_tokens;
     }
-    let digest = navigator.digest(args.query.as_deref(), &dcfg);
+    let digest = active.digest(args.query.as_deref(), &dcfg);
     check_cancel(cancellation)?;
 
-    let original_estimate: usize = navigator
+    let original_estimate: usize = active
         .records()
         .iter()
         .map(|record| (record.byte_size as usize) / 4)
@@ -618,6 +630,10 @@ pub(crate) fn run_navigate_codebase(
             "scan_result".to_string(),
             serde_json::to_value(&scan_result)?,
         );
+    }
+    check_cancel(cancellation)?;
+    if let Some(refreshed) = staged {
+        *navigator = refreshed;
     }
     Ok((value, original_estimate, compressed_tokens))
 }
