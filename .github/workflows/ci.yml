@@ -87,3 +87,16 @@ jobs:
       - run: node -c install.js
       - run: node -c bin/sophon.js
       - run: node -e "JSON.parse(require('fs').readFileSync('package.json'))"
+
+  benchmark-driver-tests:
+    name: Benchmark driver tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Validate benchmark Python syntax
+        run: python -m compileall -q benchmarks
+      - name: Test benchmark protocol and diagnostics
+        run: python -m unittest discover -s benchmarks/tests -v
