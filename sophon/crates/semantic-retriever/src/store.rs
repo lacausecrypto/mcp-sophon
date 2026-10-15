@@ -10,9 +10,9 @@
 //! sees this is plenty fast (writes are append-only, reads happen once at
 //! startup or never).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -36,6 +36,13 @@ pub struct ChunkStore {
 #[derive(Debug, Serialize, Deserialize)]
 struct StoreEntry {
     chunk: Chunk,
+}
+
+/// Borrow the chunk for serialization without cloning potentially large
+/// embedding vectors during a persistent batch commit.
+#[derive(Serialize)]
+struct StoreEntryRef<'a> {
+    chunk: &'a Chunk,
 }
 
 impl ChunkStore {
@@ -98,34 +105,49 @@ impl ChunkStore {
         self.by_id.values()
     }
 
-    /// Insert a chunk. Idempotent — re-inserting the same id is a no-op
-    /// at the file level (we don't append) but updates the in-memory copy.
-    pub fn insert(&mut self, chunk: Chunk) -> Result<bool, StoreError> {
-        if self.by_id.contains_key(&chunk.id) {
-            self.by_id.insert(chunk.id.clone(), chunk);
-            return Ok(false);
+    /// Commit an entire batch as one durable file replacement. A failure
+    /// during serialization, writing, or rename leaves both the old JSONL
+    /// snapshot and the in-memory map unchanged. Existing chunk IDs remain
+    /// idempotent; imported malformed/truncated rows are repaired because the
+    /// snapshot is written from the validated in-memory map.
+    pub fn insert_batch(&mut self, chunks: Vec<Chunk>) -> Result<usize, StoreError> {
+        let mut new_ids = HashSet::new();
+        let staged: Vec<Chunk> = chunks
+            .into_iter()
+            .filter(|chunk| {
+                !self.by_id.contains_key(&chunk.id) && new_ids.insert(chunk.id.clone())
+            })
+            .collect();
+        if staged.is_empty() {
+            return Ok(0);
         }
-        let entry = StoreEntry {
-            chunk: chunk.clone(),
-        };
-        let line = serde_json::to_string(&entry)?;
-        let mut f = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)?;
-        f.write_all(line.as_bytes())?;
-        f.write_all(b"\n")?;
-        f.flush()?;
-        self.by_id.insert(chunk.id.clone(), chunk);
-        Ok(true)
+
+        let mut bytes = Vec::new();
+        for chunk in self.by_id.values().chain(staged.iter()) {
+            serde_json::to_writer(&mut bytes, &StoreEntryRef { chunk })?;
+            bytes.push(b'\n');
+        }
+        sophon_core::atomic_file::replace(&self.path, &bytes)?;
+        let added = staged.len();
+        for chunk in staged {
+            self.by_id.insert(chunk.id.clone(), chunk);
+        }
+        Ok(added)
     }
 
-    /// Truncate the store. Useful for tests and for `update_memory(reset=true)`.
+    /// Insert a single chunk (idempotent). Use insert_batch() for multi-chunk
+    /// indexing to avoid repeatedly rebuilding the durable snapshot.
+    pub fn insert(&mut self, chunk: Chunk) -> Result<bool, StoreError> {
+        Ok(self.insert_batch(vec![chunk])? != 0)
+    }
+
+    /// Truncate both file and in-memory store. Do not clear RAM unless the
+    /// empty durable snapshot was committed successfully.
     pub fn clear(&mut self) -> Result<(), StoreError> {
-        self.by_id.clear();
         if self.path.exists() {
-            fs::write(&self.path, b"")?;
+            sophon_core::atomic_file::replace(&self.path, b"")?;
         }
+        self.by_id.clear();
         Ok(())
     }
 }
