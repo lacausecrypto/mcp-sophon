@@ -48,6 +48,27 @@ class BenchDiagnosticsTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "MCP error"):
             _send_and_read(self.proc, self.request, self.responses, timeout_seconds=0.1)
 
+    def test_quick_mode_only_skips_explicit_slow_benchmark(self):
+        outputs = {
+            "cold_start_and_footprint": [{
+                "binary_size_bytes": 100,
+                "cold_start_ms_p50": 10,
+                "cold_start_ms_p99": 11,
+                "rss_idle_mb": 12,
+            }],
+            "compress_output_per_command": {
+                "_synthetic": {"aggregate_saved": 80, "mean_saved": 70}
+            },
+        }
+        regressions, _, notes, _ = score_run(
+            outputs, {}, skipped_benches={"session_scaling_curve"}
+        )
+        self.assertEqual(regressions, [])
+        self.assertTrue(any("skipped by --quick" in line for line in notes))
+        # Missing a required benchmark remains an error outside --quick.
+        regressions, _, _, _ = score_run(outputs, {})
+        self.assertTrue(any("EXTRACTION FAILED" in line for line in regressions))
+
     def test_bench_error_includes_diagnostic_tail(self):
         regressions, _, _, _ = score_run(
             {"session_scaling_curve": {"_error": "exit 1",
