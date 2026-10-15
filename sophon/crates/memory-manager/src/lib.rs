@@ -86,6 +86,12 @@ fn load_jsonl_transactions(path: &std::path::Path) -> io::Result<Vec<Message>> {
         };
 
         if let Some(marker_value) = value.get("_sophon_txn") {
+            // Only newline-terminated records can complete an append
+            // transaction. A parseable but unfinished trailing JSON row
+            // is not a durable batch commit.
+            if !complete_line {
+                break;
+            }
             let Ok(marker) = serde_json::from_value::<BatchMarker>(marker_value.clone()) else {
                 break;
             };
@@ -317,11 +323,14 @@ impl MemoryManager {
             }
         }
 
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .append(true)
-            .open(path)?;
+        let mut options = fs::OpenOptions::new();
+        options.create(true).read(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(path)?;
         let old_len = file.metadata()?.len();
         if old_len > 0 {
             // Legacy files may end in a complete JSON message without a
@@ -577,6 +586,44 @@ mod atomic_persistence_tests {
         fs::remove_dir(&path).unwrap();
         fs::rename(&backup, &path).unwrap();
         assert_eq!(fs::read(&path).unwrap(), old);
+    }
+
+    #[test]
+    fn incomplete_multi_message_batch_is_rolled_back_on_reopen() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut memory = MemoryManager::new(MemoryConfig::default())
+            .with_persistence(&path)
+            .unwrap();
+        memory.try_append(vec![Message::user("committed")]).unwrap();
+
+        // Simulate a crash after writing a valid first record of a
+        // two-message transaction but before its second record.
+        let mut first = serde_json::to_value(Message::user("uncommitted")).unwrap();
+        first.as_object_mut().unwrap().insert(
+            "_sophon_txn".to_string(),
+            serde_json::json!({"id": "aborted", "seq": 0, "count": 2}),
+        );
+        use io::Write;
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(file, "{}", first).unwrap();
+        drop(file);
+
+        let mut resumed = MemoryManager::new(MemoryConfig::default())
+            .with_persistence(&path)
+            .unwrap();
+        assert_eq!(resumed.history_len(), 1);
+        assert_eq!(resumed.history[0].content, "committed");
+        assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 1);
+
+        resumed.try_append(vec![Message::user("after recovery")]).unwrap();
+        assert_eq!(
+            MemoryManager::new(MemoryConfig::default())
+                .with_persistence(&path)
+                .unwrap()
+                .history_len(),
+            2
+        );
     }
 
     #[test]
