@@ -349,16 +349,11 @@ pub(crate) fn run_history_tool(
         .map(|m| Message::new(parse_role(&m.role), m.content))
         .collect::<Vec<_>>();
 
-    let compressed = memory.compress_with_overrides(
-        &messages,
-        args.max_tokens,
-        args.recent_window,
-    );
+    let compressed = memory.compress_with_overrides(&messages, args.max_tokens, args.recent_window);
 
     check_cancel(cancellation)?;
     let original_tokens: usize = messages.iter().map(|m| m.token_count).sum();
-    stats
-        .record("memory_manager", original_tokens, compressed.token_count);
+    stats.record("memory_manager", original_tokens, compressed.token_count);
 
     // Optional retrieval pass: index incrementally, then look up the
     // top-k chunks for the query. No-op if the retriever is off or
@@ -375,23 +370,22 @@ pub(crate) fn run_history_tool(
     // Path A: pure-Rust graph query. Runs when graph memory is
     // active AND a query is provided. Zero LLM calls at this
     // step — all the extraction work was done at update_memory.
-    let graph_facts_value =
-        if let (Some(graph), Some(q)) = (graph.as_ref(), query.as_deref()) {
-            let top_k = retrieval_top_k.unwrap_or(8);
-            let hits = query_graph(graph, q, top_k);
-            if hits.is_empty() {
-                None
-            } else {
-                let rendered = render_facts(&hits);
-                Some(json!({
-                    "rendered": rendered,
-                    "fact_count": hits.len(),
-                    "top_score": hits.first().map(|s| s.score).unwrap_or(0.0),
-                }))
-            }
-        } else {
+    let graph_facts_value = if let (Some(graph), Some(q)) = (graph.as_ref(), query.as_deref()) {
+        let top_k = retrieval_top_k.unwrap_or(8);
+        let hits = query_graph(graph, q, top_k);
+        if hits.is_empty() {
             None
-        };
+        } else {
+            let rendered = render_facts(&hits);
+            Some(json!({
+                "rendered": rendered,
+                "fact_count": hits.len(),
+                "top_score": hits.first().map(|s| s.score).unwrap_or(0.0),
+            }))
+        }
+    } else {
+        None
+    };
 
     // Optional fact-card extraction (SOPHON_FACT_CARDS=1). Entity-
     // indexed timeline produced via one extra Haiku call. Rendered
