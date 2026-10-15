@@ -135,3 +135,51 @@ jobs:
           body: |
             See [BENCHMARK.md](./BENCHMARK.md) for measured performance numbers and [README.md](./README.md) for install instructions.
 
+
+  publish_npm:
+    name: Publish npm package (only when NPM_TOKEN is configured)
+    needs: publish_release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: npm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Check npm authentication
+        id: auth
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "$NODE_AUTH_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::NPM_TOKEN is not configured; npm publishing remains manual."
+          fi
+      - name: Verify npm version matches GitHub tag
+        if: steps.auth.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "npm/tag version mismatch"; exit 1; }
+          npm test
+      - name: Publish npm if not already present
+        if: steps.auth.outputs.enabled == 'true'
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          if npm view "mcp-sophon@$version" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "::notice::mcp-sophon@$version already exists on npm; nothing to publish."
+          else
+            npm publish --access public --registry=https://registry.npmjs.org
+          fi
