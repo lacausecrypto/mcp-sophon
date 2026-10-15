@@ -335,7 +335,6 @@ impl MemoryManager {
     }
 }
 
-
 #[cfg(test)]
 mod atomic_persistence_tests {
     use super::*;
@@ -354,7 +353,9 @@ mod atomic_persistence_tests {
         assert_eq!(memory.history_len(), 2);
         let lines = fs::read_to_string(&path).unwrap();
         assert_eq!(lines.lines().count(), 2);
-        assert!(lines.lines().all(|line| serde_json::from_str::<Message>(line).is_ok()));
+        assert!(lines
+            .lines()
+            .all(|line| serde_json::from_str::<Message>(line).is_ok()));
 
         let resumed = MemoryManager::new(MemoryConfig::default())
             .with_persistence(&path)
@@ -370,7 +371,9 @@ mod atomic_persistence_tests {
             .with_persistence(&path)
             .unwrap();
         fs::create_dir(&path).unwrap();
-        assert!(memory.try_append(vec![Message::user("must not commit")]).is_err());
+        assert!(memory
+            .try_append(vec![Message::user("must not commit")])
+            .is_err());
         assert_eq!(memory.history_len(), 0);
         fs::remove_dir(&path).unwrap();
         memory.try_append(vec![Message::user("committed")]).unwrap();
@@ -385,7 +388,9 @@ mod atomic_persistence_tests {
         let mut memory = MemoryManager::new(MemoryConfig::default())
             .with_persistence(&path)
             .unwrap();
-        memory.try_append(vec![Message::user("do not lose")]).unwrap();
+        memory
+            .try_append(vec![Message::user("do not lose")])
+            .unwrap();
         let old = fs::read(&path).unwrap();
         fs::rename(&path, &backup).unwrap();
         fs::create_dir(&path).unwrap();
@@ -421,9 +426,13 @@ mod atomic_persistence_tests {
             .with_persistence(&path)
             .unwrap();
         assert_eq!(recovered.history_len(), 2);
-        recovered.try_append(vec![Message::user("repaired")]).unwrap();
+        recovered
+            .try_append(vec![Message::user("repaired")])
+            .unwrap();
         let raw = fs::read_to_string(&path).unwrap();
         assert_eq!(raw.lines().count(), 3);
-        assert!(raw.lines().all(|line| serde_json::from_str::<Message>(line).is_ok()));
+        assert!(raw
+            .lines()
+            .all(|line| serde_json::from_str::<Message>(line).is_ok()));
     }
 }
