@@ -437,6 +437,17 @@ impl SophonServer {
             &mut self.codebase_navigator,
             Navigator::new(NavigatorConfig::default()),
         )));
+        // Each mutable subsystem owns its state throughout a transaction.
+        // The dormant placeholders are never used by stdio routing; direct
+        // SophonServer calls (outside run_stdio) retain their old API.
+        let independent_delta = Arc::new(StdMutex::new(std::mem::replace(
+            &mut self.delta_streamer,
+            DeltaStreamer::new(1),
+        )));
+        let independent_fragments = Arc::new(StdMutex::new(std::mem::replace(
+            &mut self.fragment_cache,
+            FragmentCache::new_memory(),
+        )));
         let server = Arc::new(Mutex::new(self));
         let max_active = std::env::var("SOPHON_MAX_CONCURRENT_TOOLS")
             .ok()
@@ -451,6 +462,10 @@ impl SophonServer {
         // by mutex waiters.
         let stateful_gate = Arc::new(Semaphore::new(1));
         let navigator_gate = Arc::new(Semaphore::new(1));
+        // Admission happens before a blocking worker is reserved, preventing
+        // queued writes/encodes from starving independent operations.
+        let delta_gate = Arc::new(Semaphore::new(1));
+        let fragment_gate = Arc::new(Semaphore::new(1));
 
         // Cancellation registry: maps an in-flight tools/call request_id
         // to its CancellationToken. notifications/cancelled looks up by
@@ -546,8 +561,15 @@ impl SophonServer {
                 let stats_for_task = independent_stats.clone();
                 let navigator_for_task = Arc::clone(&independent_navigator);
                 let navigator_for_gate = Arc::clone(&navigator_gate);
+                let delta_for_task = Arc::clone(&independent_delta);
+                let delta_for_gate = Arc::clone(&delta_gate);
+                let fragments_for_task = Arc::clone(&independent_fragments);
+                let fragments_for_gate = Arc::clone(&fragment_gate);
                 let tool_name = parsed.pointer("/params/name").and_then(Value::as_str);
                 let navigator_call = tool_name == Some("navigate_codebase");
+                let delta_call = matches!(tool_name, Some("read_file_delta" | "write_file_delta"));
+                let fragment_call =
+                    matches!(tool_name, Some("encode_fragments" | "decode_fragments"));
                 let independent = matches!(
                     tool_name,
                     Some(
@@ -555,6 +577,10 @@ impl SophonServer {
                             | "compress_output"
                             | "get_token_stats"
                             | "navigate_codebase"
+                            | "read_file_delta"
+                            | "write_file_delta"
+                            | "encode_fragments"
+                            | "decode_fragments"
                     )
                 );
 
@@ -592,6 +618,48 @@ impl SophonServer {
                                 return;
                             }
                             result = navigator_for_gate.acquire_owned() => result,
+                        };
+                        match acquired {
+                            Ok(permit) => Some(permit),
+                            Err(_) => {
+                                pending_for_task.lock().await.remove(&id_key);
+                                return;
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                    // Single-module admission: file versions are ordered
+                    // against other delta writes/reads, fragments against
+                    // other encodes/decodes, but not against memory/history.
+                    let delta_permit = if delta_call {
+                        let acquired = tokio::select! {
+                            biased;
+                            _ = token.cancelled() => {
+                                pending_for_task.lock().await.remove(&id_key);
+                                return;
+                            }
+                            result = delta_for_gate.acquire_owned() => result,
+                        };
+                        match acquired {
+                            Ok(permit) => Some(permit),
+                            Err(_) => {
+                                pending_for_task.lock().await.remove(&id_key);
+                                return;
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    let fragment_permit = if fragment_call {
+                        let acquired = tokio::select! {
+                            biased;
+                            _ = token.cancelled() => {
+                                pending_for_task.lock().await.remove(&id_key);
+                                return;
+                            }
+                            result = fragments_for_gate.acquire_owned() => result,
                         };
                         match acquired {
                             Ok(permit) => Some(permit),
@@ -661,6 +729,45 @@ impl SophonServer {
                                 )),
                             };
                         }
+                        if delta_call || fragment_call {
+                            let name = parsed
+                                .pointer("/params/name")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default();
+                            let args = parsed
+                                .pointer("/params/arguments")
+                                .cloned()
+                                .unwrap_or_else(|| json!({}));
+                            let result = if delta_call {
+                                let mut delta =
+                                    delta_for_task.lock().unwrap_or_else(|err| err.into_inner());
+                                crate::handlers::run_delta_tool(
+                                    &mut delta,
+                                    &worker_stats,
+                                    name,
+                                    args,
+                                    Some(&worker_token),
+                                )
+                            } else {
+                                let mut fragments = fragments_for_task
+                                    .lock()
+                                    .unwrap_or_else(|err| err.into_inner());
+                                crate::handlers::run_fragment_tool(
+                                    &mut fragments,
+                                    &worker_stats,
+                                    name,
+                                    args,
+                                    Some(&worker_token),
+                                )
+                            };
+                            return Ok((
+                                Some(tool_result_response(
+                                    parsed.get("id").cloned().unwrap_or(Value::Null),
+                                    result,
+                                )),
+                                None,
+                            ));
+                        }
                         if let Some((response, stats)) =
                             independent_rpc_response(&parsed, &output_for_task, &worker_stats)
                         {
@@ -683,6 +790,8 @@ impl SophonServer {
                         result = &mut work => Some(result),
                     };
                     drop(permit);
+                    drop(fragment_permit);
+                    drop(delta_permit);
                     drop(navigator_permit);
                     drop(stateful_permit);
 
@@ -761,36 +870,72 @@ impl SophonServer {
                 continue;
             }
 
-            // Legacy invocation is still supported. It is inline by design,
-            // but must use the same live navigator cache as MCP tools/call.
-            if parsed.get("tool").and_then(Value::as_str) == Some("navigate_codebase")
-                && !matches!(
-                    method,
-                    "initialize" | "notifications/initialized" | "ping" | "tools/list"
-                )
-            {
-                let arguments = parsed.get("arguments").cloned().unwrap_or(Value::Null);
-                let result = {
-                    let mut navigator = independent_navigator
-                        .lock()
-                        .unwrap_or_else(|err| err.into_inner());
-                    crate::handlers::run_navigate_codebase(&mut navigator, arguments, None)
-                };
-                let response = match result {
-                    Ok((value, original, compressed)) => {
-                        independent_stats.record("codebase_navigator", original, compressed);
-                        json!({"ok": true, "result": value})
-                    }
-                    Err(err) => json!({
-                        "ok": false,
-                        "error": {
-                            "code": crate::jsonrpc::classify_anyhow(&err),
-                            "message": err.to_string(),
+            // Legacy {tool, arguments} calls share the *live* stdio
+            // subsystem states with tools/call, including cache versions.
+            // They remain sequential on the stdin loop for compatibility.
+            if !matches!(
+                method,
+                "initialize" | "notifications/initialized" | "ping" | "tools/list"
+            ) {
+                if let Some(name) = parsed.get("tool").and_then(Value::as_str) {
+                    let arguments = parsed.get("arguments").cloned().unwrap_or(Value::Null);
+                    let result = match name {
+                        "navigate_codebase" => {
+                            let mut navigator = independent_navigator
+                                .lock()
+                                .unwrap_or_else(|err| err.into_inner());
+                            crate::handlers::run_navigate_codebase(&mut navigator, arguments, None)
+                                .map(|(value, original, compressed)| {
+                                    independent_stats.record(
+                                        "codebase_navigator",
+                                        original,
+                                        compressed,
+                                    );
+                                    value
+                                })
                         }
-                    }),
-                };
-                write_response(&out, &response).await?;
-                continue;
+                        "read_file_delta" | "write_file_delta" => {
+                            let mut delta = independent_delta
+                                .lock()
+                                .unwrap_or_else(|err| err.into_inner());
+                            crate::handlers::run_delta_tool(
+                                &mut delta,
+                                &independent_stats,
+                                name,
+                                arguments,
+                                None,
+                            )
+                        }
+                        "encode_fragments" | "decode_fragments" => {
+                            let mut fragments = independent_fragments
+                                .lock()
+                                .unwrap_or_else(|err| err.into_inner());
+                            crate::handlers::run_fragment_tool(
+                                &mut fragments,
+                                &independent_stats,
+                                name,
+                                arguments,
+                                None,
+                            )
+                        }
+                        _ => {
+                            let mut srv = server.lock().await;
+                            srv.handle_tool_call(name, arguments)
+                        }
+                    };
+                    let response = match result {
+                        Ok(value) => json!({"ok": true, "result": value}),
+                        Err(err) => json!({
+                            "ok": false,
+                            "error": {
+                                "code": crate::jsonrpc::classify_anyhow(&err),
+                                "message": err.to_string(),
+                            }
+                        }),
+                    };
+                    write_response(&out, &response).await?;
+                    continue;
+                }
             }
 
             // Control-plane messages do not wait on mutable tool state.

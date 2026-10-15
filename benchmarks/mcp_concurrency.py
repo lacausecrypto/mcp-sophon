@@ -271,6 +271,149 @@ def navigator_and_stats_test(binary):
             client.close()
 
 
+
+def delta_fragment_integrity_test(binary):
+    """The two dedicated module caches remain coherent under concurrent calls."""
+    with tempfile.TemporaryDirectory(prefix="sophon-subsystems-") as directory:
+        path = Path(directory) / "state.rs"
+        path.write_text("pub const REVISION: u64 = 1;\n", encoding="utf-8")
+        client = Client(binary, max_workers=4)
+        try:
+            client.send([call(9000, "read_file_delta", {"path": str(path)})])
+            first = check_ok(client.collect([9000])[9000])
+            assert first["Full"]["version"] == 1, first
+
+            # All writes to this *single* path must be serialized: neither
+            # duplicate versions nor partially replaced files are allowed.
+            updates = {
+                9001 + i: f"pub const REVISION: u64 = {i + 2};\n"
+                for i in range(16)
+            }
+            client.send([
+                call(request_id, "write_file_delta", {
+                    "path": str(path), "changes": {"Full": {"content": content}}
+                })
+                for request_id, content in updates.items()
+            ])
+            written = client.collect(updates, deadline_seconds=90)
+            versions = sorted(check_ok(reply)["Full"]["version"]
+                              for reply in written.values())
+            assert versions == list(range(2, 18)), versions
+            final_version = next(
+                check_ok(reply)["Full"]["content"]
+                for reply in written.values()
+                if check_ok(reply)["Full"]["version"] == 17
+            )
+            assert final_version == path.read_text(encoding="utf-8")
+            assert final_version in updates.values()
+
+            client.send([call(9020, "read_file_delta", {
+                "path": str(path), "known_version": 17})])
+            unchanged = check_ok(client.collect([9020])[9020])
+            assert unchanged["Unchanged"]["version"] == 17, unchanged
+
+            # Each encode must commit its newly emitted fragment IDs before
+            # any response can be consumed by a decoder.
+            contents = {
+                9100 + i: "```rust\n" +
+                (f"pub fn isolated_fragment_{i}(n: usize) -> usize {{ n * 3 + {i} }}\n" * 65) +
+                "```"
+                for i in range(10)
+            }
+            client.send([call(request_id, "encode_fragments", {"content": content})
+                         for request_id, content in contents.items()])
+            encodings = client.collect(contents, deadline_seconds=90)
+            encoded = {}
+            for request_id, response in encodings.items():
+                result = check_ok(response)
+                assert "[FRAGMENT:" in result["content"], (request_id, result)
+                encoded[request_id] = result["content"]
+
+            client.send([call(request_id + 100, "decode_fragments",
+                              {"content": encoded[request_id]})
+                         for request_id in contents])
+            decoded = client.collect([request_id + 100 for request_id in contents])
+            for request_id, content in contents.items():
+                assert check_ok(decoded[request_id + 100])["content"] == content
+
+            # Legacy calls must use the *same* file versions and fragments
+            # rather than an unused placeholder state in SophonServer.
+            client.send([{"tool": "read_file_delta",
+                          "arguments": {"path": str(path), "known_version": 17}}])
+            legacy_delta = client.received.get(timeout=30)
+            assert legacy_delta.get("ok") is True, legacy_delta
+            assert legacy_delta["result"]["Unchanged"]["version"] == 17
+            client.send([{"tool": "decode_fragments",
+                          "arguments": {"content": encoded[9100]}}])
+            legacy_fragment = client.received.get(timeout=30)
+            assert legacy_fragment.get("ok") is True, legacy_fragment
+            assert legacy_fragment["result"]["content"] == contents[9100]
+
+            client.send([call(9300, "get_token_stats", {})])
+            stats = check_ok(client.collect([9300])[9300])
+            modules = stats["modules"]
+            assert modules["delta_streamer"]["calls"] == 3, modules
+            assert modules["fragment_cache"]["calls"] == 10, modules
+            assert stats["totals"]["calls"] == sum(
+                item["calls"] for item in modules.values()
+            )
+
+            return {
+                "concurrent_file_writes": 16,
+                "versions_contiguous": True,
+                "disk_matches_latest_version": True,
+                "fragment_encodes": 10,
+                "decode_roundtrips": 10,
+                "legacy_state_shared": True,
+                "statistics_consistent": True,
+            }
+        finally:
+            client.close()
+
+
+def queued_mutation_cancellation_test(binary):
+    """Cancelled queued delta writes and fragment encodes must not commit."""
+    with tempfile.TemporaryDirectory(prefix="sophon-cancel-") as directory:
+        path = Path(directory) / "keep.txt"
+        path.write_text("untouched", encoding="utf-8")
+        client = Client(binary, max_workers=1)
+        try:
+            large = [{"role": "user", "content": f"load {i}: " + ("memory " * 90)}
+                     for i in range(120)]
+            jobs = [
+                call(9400 + i, "compress_history", {
+                    "messages": large, "max_tokens": 500
+                }) for i in range(5)
+            ]
+            jobs.extend([
+                call(9500, "write_file_delta", {
+                    "path": str(path),
+                    "changes": {"Full": {"content": "must-not-be-written"}}
+                }),
+                call(9501, "encode_fragments", {
+                    "content": "```rust\n" +
+                    ("pub fn must_not_commit(n: u64) -> u64 { n + 2 }\n" * 80) +
+                    "```"
+                }),
+                {"jsonrpc": "2.0", "method": "notifications/cancelled",
+                 "params": {"requestId": 9500}},
+                {"jsonrpc": "2.0", "method": "notifications/cancelled",
+                 "params": {"requestId": 9501}},
+            ])
+            client.send(jobs)
+            replies = client.collect(range(9400, 9405), deadline_seconds=90)
+            for response in replies.values():
+                check_ok(response)
+            assert path.read_text(encoding="utf-8") == "untouched"
+            client.send([call(9600, "get_token_stats", {})])
+            stats = check_ok(client.collect([9600])[9600])
+            assert stats["modules"].get("fragment_cache", {}).get("calls", 0) == 0
+            return {"queued_mutations_cancelled": 2,
+                    "file_unchanged": True, "fragment_store_unchanged": True}
+        finally:
+            client.close()
+
+
 def cancellation_test(binary):
     client = Client(binary, max_workers=1)
     try:
@@ -312,6 +455,8 @@ def main():
     report["cancellation"] = cancellation_test(args.binary)
     report["mixed_workload"] = mixed_workload_test(args.binary)
     report["navigator_and_stats"] = navigator_and_stats_test(args.binary)
+    report["delta_fragment_integrity"] = delta_fragment_integrity_test(args.binary)
+    report["queued_mutation_cancellation"] = queued_mutation_cancellation_test(args.binary)
     print(json.dumps(report, indent=2))
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

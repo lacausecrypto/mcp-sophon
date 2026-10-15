@@ -463,76 +463,20 @@ pub(crate) fn handle_tool_call_with_cancel(
             }
             Ok(value)
         }
-        "read_file_delta" => {
-            let args: ReadFileDeltaArgs = serde_json::from_value(arguments)?;
-            let safe_path = authorize_path(std::path::Path::new(&args.path))?;
-            check_cancel(cancellation)?;
-            let response = server.delta_streamer.read_file_delta(
-                safe_path.clone(),
-                args.known_version,
-                args.known_hash.as_deref(),
-            )?;
-
-            // Pull the original token count from the authoritative state store
-            // instead of re-reading the file (which races with external writes
-            // and previously swallowed IO errors via `unwrap_or`).
-            use delta_streamer::protocol::FileReadResponse;
-            let full_tokens = server
-                .delta_streamer
-                .state_store()
-                .get(&safe_path)
-                .map(|s| s.token_count);
-            let (orig, compressed) = match &response {
-                FileReadResponse::Full { token_count, .. } => (*token_count, *token_count),
-                FileReadResponse::Delta { token_count, .. } => {
-                    (full_tokens.unwrap_or(*token_count), *token_count)
-                }
-                FileReadResponse::Unchanged { .. } => (full_tokens.unwrap_or(0), 0),
-            };
-            server.stats.record("delta_streamer", orig, compressed);
-
-            Ok(serde_json::to_value(response)?)
-        }
-        "write_file_delta" => {
-            let args: WriteFileDeltaArgs = serde_json::from_value(arguments)?;
-            let safe_path = authorize_path(std::path::Path::new(&args.path))?;
-            check_cancel(cancellation)?;
-            let response = server.delta_streamer.write_file_delta(FileWriteRequest {
-                path: safe_path,
-                changes: args.changes,
-            })?;
-            Ok(serde_json::to_value(response)?)
-        }
-        "encode_fragments" => {
-            let args: EncodeFragmentsArgs = serde_json::from_value(arguments)?;
-            if let Some(auto) = args.auto_detect {
-                server.fragment_cache.config.auto_detect = auto;
-            }
-
-            check_cancel(cancellation)?;
-            let encoded = server.fragment_cache.encode(&args.content);
-            server.stats.record(
-                "fragment_cache",
-                count_tokens(&args.content),
-                count_tokens(&encoded.content),
-            );
-
-            Ok(json!({
-                "content": encoded.content,
-                "used_fragments": encoded.used_fragments,
-                "new_fragments": encoded.new_fragments,
-                "token_count": encoded.token_count,
-                "tokens_saved": encoded.tokens_saved,
-            }))
-        }
-        "decode_fragments" => {
-            let args: DecodeFragmentsArgs = serde_json::from_value(arguments)?;
-            let decoded = server
-                .fragment_cache
-                .decode(&args.content)
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-            Ok(json!({ "content": decoded }))
-        }
+        "read_file_delta" | "write_file_delta" => run_delta_tool(
+            &mut server.delta_streamer,
+            &server.stats,
+            name,
+            arguments,
+            cancellation,
+        ),
+        "encode_fragments" | "decode_fragments" => run_fragment_tool(
+            &mut server.fragment_cache,
+            &server.stats,
+            name,
+            arguments,
+            cancellation,
+        ),
         "count_tokens" => {
             let args: CountTokensArgs = serde_json::from_value(arguments)?;
             let n = count_tokens(&args.text);
@@ -560,6 +504,101 @@ pub(crate) fn handle_tool_call_with_cancel(
         }
         "get_token_stats" => get_token_stats_value(&server.stats, arguments),
         _ => Err(anyhow::anyhow!("unknown tool: {}", name)),
+    }
+}
+
+/// One delta-streamer transaction: the file state store and the filesystem
+/// operation stay under the same module mutex. Cancellation is checked before
+/// entry, never in the middle of a persistent write or store update.
+pub(crate) fn run_delta_tool(
+    delta: &mut delta_streamer::DeltaStreamer,
+    stats: &StatsCollector,
+    name: &str,
+    arguments: Value,
+    cancellation: Option<&CancellationToken>,
+) -> anyhow::Result<Value> {
+    check_cancel(cancellation)?;
+    match name {
+        "read_file_delta" => {
+            let args: ReadFileDeltaArgs = serde_json::from_value(arguments)?;
+            let safe_path = authorize_path(std::path::Path::new(&args.path))?;
+            check_cancel(cancellation)?;
+            let response = delta.read_file_delta(
+                safe_path.clone(),
+                args.known_version,
+                args.known_hash.as_deref(),
+            )?;
+
+            // Read authoritative version/token count while holding the
+            // same module lock as the file read and cache update.
+            use delta_streamer::protocol::FileReadResponse;
+            let full_tokens = delta.state_store().get(&safe_path).map(|s| s.token_count);
+            let (original, compressed) = match &response {
+                FileReadResponse::Full { token_count, .. } => (*token_count, *token_count),
+                FileReadResponse::Delta { token_count, .. } => {
+                    (full_tokens.unwrap_or(*token_count), *token_count)
+                }
+                FileReadResponse::Unchanged { .. } => (full_tokens.unwrap_or(0), 0),
+            };
+            stats.record("delta_streamer", original, compressed);
+            Ok(serde_json::to_value(response)?)
+        }
+        "write_file_delta" => {
+            let args: WriteFileDeltaArgs = serde_json::from_value(arguments)?;
+            let safe_path = authorize_path(std::path::Path::new(&args.path))?;
+            check_cancel(cancellation)?;
+            let response = delta.write_file_delta(FileWriteRequest {
+                path: safe_path,
+                changes: args.changes,
+            })?;
+            Ok(serde_json::to_value(response)?)
+        }
+        _ => Err(anyhow::anyhow!("unknown delta tool: {}", name)),
+    }
+}
+
+/// Fragment encoding inserts references into a mutable store. Hold its
+/// dedicated lock throughout encoding and store commit so any subsequent
+/// decode observes every fragment returned by an earlier encoder response.
+pub(crate) fn run_fragment_tool(
+    fragments: &mut fragment_cache::FragmentCache,
+    stats: &StatsCollector,
+    name: &str,
+    arguments: Value,
+    cancellation: Option<&CancellationToken>,
+) -> anyhow::Result<Value> {
+    check_cancel(cancellation)?;
+    match name {
+        "encode_fragments" => {
+            let args: EncodeFragmentsArgs = serde_json::from_value(arguments)?;
+            check_cancel(cancellation)?;
+            if let Some(auto_detect) = args.auto_detect {
+                fragments.config.auto_detect = auto_detect;
+            }
+
+            let encoded = fragments.encode(&args.content);
+            stats.record(
+                "fragment_cache",
+                count_tokens(&args.content),
+                count_tokens(&encoded.content),
+            );
+            Ok(json!({
+                "content": encoded.content,
+                "used_fragments": encoded.used_fragments,
+                "new_fragments": encoded.new_fragments,
+                "token_count": encoded.token_count,
+                "tokens_saved": encoded.tokens_saved,
+            }))
+        }
+        "decode_fragments" => {
+            let args: DecodeFragmentsArgs = serde_json::from_value(arguments)?;
+            check_cancel(cancellation)?;
+            let decoded = fragments
+                .decode(&args.content)
+                .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+            Ok(json!({ "content": decoded }))
+        }
+        _ => Err(anyhow::anyhow!("unknown fragment tool: {}", name)),
     }
 }
 
@@ -1195,6 +1234,74 @@ mod phase1_concurrency_tests {
             .unwrap();
         assert_eq!(reused["scan_result"]["kind"], "incremental");
         assert_eq!(reused["scan_result"]["unchanged"], 1);
+    }
+
+    #[test]
+    fn cancelled_fragment_encode_keeps_configuration_and_store() {
+        let mut server = SophonServer::new();
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        let result = handle_tool_call_with_cancel(
+            &mut server,
+            "encode_fragments",
+            json!({"content": "brief", "auto_detect": false}),
+            Some(&cancelled),
+        );
+        assert!(result.is_err());
+        assert!(server.fragment_cache.config.auto_detect);
+    }
+
+    #[test]
+    fn delta_versions_remain_monotonic_and_read_cache_is_consistent() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("file.rs");
+        std::fs::write(&path, "pub fn original() {}\n").unwrap();
+        let mut server = SophonServer::new();
+        let filepath = path.to_string_lossy().to_string();
+        let first = server
+            .handle_tool_call("read_file_delta", json!({"path": filepath}))
+            .unwrap();
+        assert_eq!(first["Full"]["version"], 1);
+
+        for version in 2..=6 {
+            let response = server
+                .handle_tool_call(
+                    "write_file_delta",
+                    json!({
+                        "path": filepath,
+                        "changes": {"Full": {"content": format!("pub const VALUE: u64 = {version};\n")}}
+                    }),
+                )
+                .unwrap();
+            assert_eq!(response["Full"]["version"], version);
+        }
+        let unchanged = server
+            .handle_tool_call(
+                "read_file_delta",
+                json!({"path": filepath, "known_version": 6}),
+            )
+            .unwrap();
+        assert_eq!(unchanged["Unchanged"]["version"], 6);
+        assert_eq!(server.stats.snapshot()["delta_streamer"].calls, 2);
+    }
+
+    #[test]
+    fn encoded_fragments_are_available_to_decoder_immediately() {
+        let mut server = SophonServer::new();
+        let content = format!(
+            "```rust\n{}```",
+            "pub fn long_repeated_rust_code(value: usize) -> usize { value * 2 + 1 }\n".repeat(80)
+        );
+        let encoded = server
+            .handle_tool_call("encode_fragments", json!({"content": content}))
+            .unwrap();
+        let compressed = encoded["content"].as_str().unwrap();
+        assert!(compressed.contains("[FRAGMENT:"), "expected reference");
+        let decoded = server
+            .handle_tool_call("decode_fragments", json!({"content": compressed}))
+            .unwrap();
+        assert_eq!(decoded["content"], content);
+        assert_eq!(server.stats.snapshot()["fragment_cache"].calls, 1);
     }
 
     #[test]
