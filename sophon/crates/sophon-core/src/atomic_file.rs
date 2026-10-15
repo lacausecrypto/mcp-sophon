@@ -33,6 +33,12 @@ pub fn replace(path: &Path, contents: &[u8]) -> io::Result<()> {
                 "atomic replacement does not follow destination symlinks",
             ));
         }
+        Ok(metadata) if metadata.permissions().readonly() => {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "atomic replacement refused for a read-only destination",
+            ));
+        }
         Ok(metadata) => Some(metadata.permissions()),
         Err(err) if err.kind() == io::ErrorKind::NotFound => None,
         Err(err) => return Err(err),
@@ -143,6 +149,19 @@ mod tests {
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o640
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn respects_a_read_only_destination() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = fixture();
+        let path = dir.join("locked.json");
+        fs::write(&path, b"original").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
+        assert!(replace(&path, b"new").is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"original");
         fs::remove_dir_all(dir).unwrap();
     }
 
