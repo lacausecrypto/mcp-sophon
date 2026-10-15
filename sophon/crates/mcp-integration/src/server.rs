@@ -421,7 +421,7 @@ impl SophonServer {
         }
     }
 
-    pub async fn run_stdio(self) -> anyhow::Result<()> {
+    pub async fn run_stdio(mut self) -> anyhow::Result<()> {
         use crate::jsonrpc::{error_response, PARSE_ERROR};
         use tokio::io::{self, AsyncBufReadExt, BufReader};
         use tokio::sync::{Mutex, Semaphore};
@@ -430,6 +430,13 @@ impl SophonServer {
         // serialized to preserve their existing transaction boundaries.
         let independent_output = Arc::new(self.output_compressor.clone());
         let independent_stats = self.stats.clone();
+        // Move the live navigator cache into its own synchronization domain.
+        // This preserves the public synchronous SophonServer API while stdio
+        // navigation can proceed beside memory/fragment/file operations.
+        let independent_navigator = Arc::new(StdMutex::new(std::mem::replace(
+            &mut self.codebase_navigator,
+            Navigator::new(NavigatorConfig::default()),
+        )));
         let server = Arc::new(Mutex::new(self));
         let max_active = std::env::var("SOPHON_MAX_CONCURRENT_TOOLS")
             .ok()
@@ -443,6 +450,7 @@ impl SophonServer {
         // consuming a blocking-worker slot so pure tools cannot be starved
         // by mutex waiters.
         let stateful_gate = Arc::new(Semaphore::new(1));
+        let navigator_gate = Arc::new(Semaphore::new(1));
 
         // Cancellation registry: maps an in-flight tools/call request_id
         // to its CancellationToken. notifications/cancelled looks up by
@@ -536,9 +544,13 @@ impl SophonServer {
                 let stateful_for_task = Arc::clone(&stateful_gate);
                 let output_for_task = Arc::clone(&independent_output);
                 let stats_for_task = independent_stats.clone();
+                let navigator_for_task = Arc::clone(&independent_navigator);
+                let navigator_for_gate = Arc::clone(&navigator_gate);
+                let tool_name = parsed.pointer("/params/name").and_then(Value::as_str);
+                let navigator_call = tool_name == Some("navigate_codebase");
                 let independent = matches!(
-                    parsed.pointer("/params/name").and_then(Value::as_str),
-                    Some("count_tokens" | "compress_output")
+                    tool_name,
+                    Some("count_tokens" | "compress_output" | "get_token_stats" | "navigate_codebase")
                 );
 
                 tool_tasks.spawn(async move {
@@ -563,6 +575,28 @@ impl SophonServer {
                                 return;
                             }
                         }
+                    };
+
+                    // Navigator calls serialize only with other navigator
+                    // scans, not with the unrelated mutable modules.
+                    let navigator_permit = if navigator_call {
+                        let acquired = tokio::select! {
+                            biased;
+                            _ = token.cancelled() => {
+                                pending_for_task.lock().await.remove(&id_key);
+                                return;
+                            }
+                            result = navigator_for_gate.acquire_owned() => result,
+                        };
+                        match acquired {
+                            Ok(permit) => Some(permit),
+                            Err(_) => {
+                                pending_for_task.lock().await.remove(&id_key);
+                                return;
+                            }
+                        }
+                    } else {
+                        None
                     };
 
                     // Cancel queued work before acquiring a blocking worker.
@@ -591,13 +625,42 @@ impl SophonServer {
                         if worker_token.is_cancelled() {
                             return Ok((None, None));
                         }
+                        if navigator_call {
+                            let args = parsed
+                                .pointer("/params/arguments")
+                                .cloned()
+                                .unwrap_or_else(|| json!({}));
+                            let mut navigator = navigator_for_task
+                                .lock()
+                                .unwrap_or_else(|err| err.into_inner());
+                            let result = crate::handlers::run_navigate_codebase(
+                                &mut navigator,
+                                args,
+                                Some(&worker_token),
+                            );
+                            return match result {
+                                Ok((value, original, compressed)) => Ok((
+                                    Some(tool_result_response(
+                                        parsed.get("id").cloned().unwrap_or(Value::Null),
+                                        Ok(value),
+                                    )),
+                                    Some(("codebase_navigator", original, compressed)),
+                                )),
+                                Err(err) => Ok((
+                                    Some(tool_result_response(
+                                        parsed.get("id").cloned().unwrap_or(Value::Null),
+                                        Err(err),
+                                    )),
+                                    None,
+                                )),
+                            };
+                        }
                         if let Some((response, stats)) =
                             independent_rpc_response(&parsed, &output_for_task, &stats_for_task)
                         {
                             return Ok((Some(response), stats));
                         }
-                        // Stateful calls retain serialization, while independent
-                        // tools avoid waiting for their computation.
+                        // Other stateful tools retain their transaction boundary.
                         let mut srv = worker_server.blocking_lock();
                         srv.handle_json_rpc_message_with_cancel(&parsed, Some(&worker_token))
                             .map(|response| (response, None))
@@ -614,6 +677,7 @@ impl SophonServer {
                         result = &mut work => Some(result),
                     };
                     drop(permit);
+                    drop(navigator_permit);
                     drop(stateful_permit);
 
                     let (response, stats) = match completed {
@@ -644,8 +708,8 @@ impl SophonServer {
                     };
 
                     // Stats use an independent short critical section.
-                    if let Some((original, compressed)) = stats {
-                        stats_for_task.record("output_compressor", original, compressed);
+                    if let Some((module, original, compressed)) = stats {
+                        stats_for_task.record(module, original, compressed);
                     }
                     if !token.is_cancelled() {
                         if let Some(response) = response {
@@ -691,6 +755,33 @@ impl SophonServer {
                 continue;
             }
 
+            // Legacy invocation is still supported. It is inline by design,
+            // but must use the same live navigator cache as MCP tools/call.
+            if parsed.get("tool").and_then(Value::as_str) == Some("navigate_codebase") {
+                let arguments = parsed.get("arguments").cloned().unwrap_or(Value::Null);
+                let result = {
+                    let mut navigator = independent_navigator
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner());
+                    crate::handlers::run_navigate_codebase(&mut navigator, arguments, None)
+                };
+                let response = match result {
+                    Ok((value, original, compressed)) => {
+                        independent_stats.record("codebase_navigator", original, compressed);
+                        json!({"ok": true, "result": value})
+                    }
+                    Err(err) => json!({
+                        "ok": false,
+                        "error": {
+                            "code": crate::jsonrpc::classify_anyhow(&err),
+                            "message": err.to_string(),
+                        }
+                    }),
+                };
+                write_response(&out, &response).await?;
+                continue;
+            }
+
             // Control-plane messages do not wait on mutable tool state.
             let response_opt = if let Some(response) = control_rpc_response(&parsed) {
                 response
@@ -717,12 +808,47 @@ impl SophonServer {
     }
 }
 
-/// A pure tool's CPU work can run without locking mutable server state.
+/// Render a regular MCP tool response, preserving the pre-existing
+/// structuredContent and isError behavior in both dispatch paths.
+fn tool_result_response(id: Value, result: anyhow::Result<Value>) -> Value {
+    match result {
+        Ok(value) => {
+            let text = serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string());
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "content": [{"type": "text", "text": text}],
+                    "structuredContent": value,
+                    "isError": false
+                }
+            })
+        }
+        Err(err) => {
+            let code = crate::jsonrpc::classify_anyhow(&err);
+            let text = err.to_string();
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "content": [{"type": "text", "text": &text}],
+                    "structuredContent": {
+                        "error": {"code": code, "message": &text}
+                    },
+                    "isError": true
+                }
+            })
+        }
+    }
+}
+
+/// Execute pure tools without locking mutable state, returning the module's
+/// accounting delta for a separate short stats transaction.
 fn independent_rpc_response(
     message: &Value,
     output: &OutputCompressor,
     stats: &StatsCollector,
-) -> Option<(Value, Option<(usize, usize)>)> {
+) -> Option<(Value, Option<(&'static str, usize, usize)>)> {
     let name = message.pointer("/params/name")?.as_str()?;
     let arguments = message
         .pointer("/params/arguments")
@@ -731,39 +857,11 @@ fn independent_rpc_response(
     let result = crate::handlers::independent_tool_call(name, arguments, output, stats)?;
     let id = message.get("id").cloned().unwrap_or(Value::Null);
     Some(match result {
-        Ok((value, stats)) => {
-            let text = serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string());
-            (
-                json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": {
-                        "content": [{"type": "text", "text": text}],
-                        "structuredContent": value,
-                        "isError": false
-                    }
-                }),
-                stats,
-            )
-        }
-        Err(err) => {
-            let code = crate::jsonrpc::classify_anyhow(&err);
-            let text = err.to_string();
-            (
-                json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": {
-                        "content": [{"type": "text", "text": &text}],
-                        "structuredContent": {
-                            "error": {"code": code, "message": &text}
-                        },
-                        "isError": true
-                    }
-                }),
-                None,
-            )
-        }
+        Ok((value, accounting)) => (
+            tool_result_response(id, Ok(value)),
+            accounting.map(|(original, compressed)| ("output_compressor", original, compressed)),
+        ),
+        Err(err) => (tool_result_response(id, Err(err)), None),
     })
 }
 
