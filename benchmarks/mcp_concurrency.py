@@ -163,6 +163,32 @@ def shared_state_test(client):
     return {"writes": 16, "history_len": 16, "integrity": "pass"}
 
 
+
+def mixed_workload_test(binary):
+    """Pure queries must be served while serialised memory jobs are queued."""
+    client = Client(binary, max_workers=4)
+    try:
+        large = [{"role": "user", "content": f"mixed {i} " + "context " * 80}
+                 for i in range(120)]
+        stateful = [call(7000 + i, "compress_history", {
+            "messages": large, "max_tokens": 500}) for i in range(16)]
+        pure = [call(7100 + i, "count_tokens", {"text": "fast-path " * 30})
+                for i in range(4)]
+        client.send(stateful + pure)
+        responses = client.collect([*range(7000, 7016), *range(7100, 7104)],
+                                   deadline_seconds=60)
+        for response in responses.values():
+            check_ok(response)
+        completion_order = list(responses)
+        last_stateful = max(completion_order.index(i) for i in range(7000, 7016))
+        first_pure = min(completion_order.index(i) for i in range(7100, 7104))
+        assert first_pure < last_stateful, (
+            f"Pure tools starved behind serialised tools: {completion_order}")
+        return {"queued_stateful": 16, "pure": 4, "pure_serviced_early": True}
+    finally:
+        client.close()
+
+
 def cancellation_test(binary):
     client = Client(binary, max_workers=1)
     try:
@@ -202,6 +228,7 @@ def main():
     finally:
         client.close()
     report["cancellation"] = cancellation_test(args.binary)
+    report["mixed_workload"] = mixed_workload_test(args.binary)
     print(json.dumps(report, indent=2))
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
