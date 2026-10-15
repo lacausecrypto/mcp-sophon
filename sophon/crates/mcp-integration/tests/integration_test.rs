@@ -12,7 +12,7 @@ fn test_tool_definitions_present() {
 
 #[test]
 fn test_update_memory_accumulates_across_calls() {
-    let mut server = SophonServer::new();
+    let server = SophonServer::new();
 
     // First call: append two messages, no snapshot
     let r1 = server
@@ -54,7 +54,7 @@ fn test_update_memory_accumulates_across_calls() {
 
 #[test]
 fn test_compress_prompt_handler() {
-    let mut server = SophonServer::new();
+    let server = SophonServer::new();
 
     let result = server
         .handle_tool_call(
@@ -72,7 +72,7 @@ fn test_compress_prompt_handler() {
 
 #[test]
 fn test_mcp_jsonrpc_tools_list_and_call() {
-    let mut server = SophonServer::new();
+    let server = SophonServer::new();
 
     let init = server
         .handle_json_rpc_message(&json!({
@@ -130,7 +130,7 @@ fn test_mcp_jsonrpc_tools_list_and_call() {
 
 #[test]
 fn initialize_advertises_2025_06_18_protocol_version() {
-    let mut server = SophonServer::new();
+    let server = SophonServer::new();
     let init = server
         .handle_json_rpc_message(&json!({
             "jsonrpc":"2.0",
@@ -155,7 +155,7 @@ fn unknown_tool_returns_structured_error_code() {
     // Per jsonrpc::SOPHON_TOOL_NOT_FOUND = -32001. The response MUST be
     // a JSON-RPC error (not a tool result with isError) so clients can
     // branch on the code without regex-matching the message text.
-    let mut server = SophonServer::new();
+    let server = SophonServer::new();
     let resp = server
         .handle_json_rpc_message(&json!({
             "jsonrpc":"2.0",
@@ -185,7 +185,7 @@ fn tools_call_missing_name_returns_invalid_params() {
     // -32602 INVALID_PARAMS. Previously this bubbled up through `?` and
     // could kill the stdio loop; now it's reported as a spec-shaped
     // error response.
-    let mut server = SophonServer::new();
+    let server = SophonServer::new();
     let resp = server
         .handle_json_rpc_message(&json!({
             "jsonrpc":"2.0",
@@ -203,7 +203,7 @@ fn notifications_cancelled_is_acknowledged_silently() {
     // Cancellations are no-op for the synchronous stdio dispatcher, but
     // they must not produce a JSON-RPC response (it's a notification,
     // no id) or be treated as an unknown method.
-    let mut server = SophonServer::new();
+    let server = SophonServer::new();
     let resp = server
         .handle_json_rpc_message(&json!({
             "jsonrpc":"2.0",
@@ -315,7 +315,7 @@ fn tool_error_produces_is_error_with_structured_code() {
     // When a tool executes but returns an error, MCP requires the
     // response to be a `result` with `isError: true`. Sophon adds a
     // machine-readable error code in `structuredContent.error.code`.
-    let mut server = SophonServer::new();
+    let server = SophonServer::new();
     // read_file_delta on a nonexistent path is the simplest forced
     // failure; the tool exists and accepts the arguments, then fails
     // during execution.
