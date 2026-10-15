@@ -551,75 +551,72 @@ pub(crate) fn handle_tool_call_with_cancel(
             Ok(serde_json::to_value(result)?)
         }
         "navigate_codebase" => {
-            let args: NavigateCodebaseArgs = serde_json::from_value(arguments)?;
-
-            // Resolve the root: explicit arg > cached root.
-            let root_to_scan = match args.root.as_deref() {
-                Some(p) => Some(authorize_path(std::path::Path::new(p))?),
-                None => server
-                    .codebase_navigator
-                    .root()
-                    .map(|root| authorize_path(root.as_path()))
-                    .transpose()?,
-            };
-
-            // `force_rescan` clears the incremental cache so the next
-            // `scan` call always runs a full Fresh scan.
-            if args.force_rescan {
-                server.codebase_navigator.reset();
-            }
-
-            // We always call `scan` now — Navigator::scan is naturally
-            // incremental when the root matches the cached one, and
-            // falls back to a Fresh full scan otherwise. This removes
-            // the old "skip scan if cache exists" heuristic, which
-            // previously meant the client couldn't pick up filesystem
-            // changes without `force_rescan=true`.
-            let root = root_to_scan.ok_or_else(|| {
-                anyhow::anyhow!("navigate_codebase: no root provided and no cached scan available")
-            })?;
-            check_cancel(cancellation)?;
-            let scan_result = server
-                .codebase_navigator
-                .scan(&root)
-                .map_err(|e| anyhow::anyhow!("scan failed: {}", e))?;
-
-            let mut dcfg = codebase_navigator::DigestConfig::default();
-            if let Some(max) = args.max_tokens {
-                dcfg.max_tokens = max;
-            }
-            check_cancel(cancellation)?;
-            let digest = server
-                .codebase_navigator
-                .digest(args.query.as_deref(), &dcfg);
-
-            // Crudely estimate "original" tokens as the sum of byte
-            // sizes / 4 (~1 token per 4 bytes) so get_token_stats has
-            // something meaningful to compare against.
-            let original_estimate: usize = server
-                .codebase_navigator
-                .records()
-                .iter()
-                .map(|r| (r.byte_size as usize) / 4)
-                .sum();
+            let (value, original, compressed) =
+                run_navigate_codebase(&mut server.codebase_navigator, arguments, cancellation)?;
             server
                 .stats
-                .record("codebase_navigator", original_estimate, digest.total_tokens);
-
-            // Merge the digest payload with the scan diagnostics so the
-            // caller sees both in one response object.
-            let mut value = serde_json::to_value(digest)?;
-            if let Some(obj) = value.as_object_mut() {
-                obj.insert(
-                    "scan_result".to_string(),
-                    serde_json::to_value(&scan_result)?,
-                );
-            }
+                .record("codebase_navigator", original, compressed);
             Ok(value)
         }
         "get_token_stats" => get_token_stats_value(&server.stats, arguments),
         _ => Err(anyhow::anyhow!("unknown tool: {}", name)),
     }
+}
+
+/// Filesystem navigation owns only its own mutable cache. This same
+/// implementation is called from the public synchronous handler and the
+/// dedicated stdio worker, retaining all existing scan/digest semantics.
+pub(crate) fn run_navigate_codebase(
+    navigator: &mut codebase_navigator::Navigator,
+    arguments: Value,
+    cancellation: Option<&CancellationToken>,
+) -> anyhow::Result<(Value, usize, usize)> {
+    check_cancel(cancellation)?;
+    let args: NavigateCodebaseArgs = serde_json::from_value(arguments)?;
+
+    // Resolve explicit root first, otherwise use the navigator's cached root.
+    let root_to_scan = match args.root.as_deref() {
+        Some(path) => Some(authorize_path(std::path::Path::new(path))?),
+        None => navigator
+            .root()
+            .map(|root| authorize_path(root.as_path()))
+            .transpose()?,
+    };
+    let root = root_to_scan.ok_or_else(|| {
+        anyhow::anyhow!("navigate_codebase: no root provided and no cached scan available")
+    })?;
+
+    // Do not mutate the cached state if cancellation occurred while
+    // validating the path. A scan itself is not interrupted mid-mutation.
+    check_cancel(cancellation)?;
+    if args.force_rescan {
+        navigator.reset();
+    }
+
+    let scan_result = navigator
+        .scan(&root)
+        .map_err(|err| anyhow::anyhow!("scan failed: {}", err))?;
+    check_cancel(cancellation)?;
+
+    let mut dcfg = codebase_navigator::DigestConfig::default();
+    if let Some(max_tokens) = args.max_tokens {
+        dcfg.max_tokens = max_tokens;
+    }
+    let digest = navigator.digest(args.query.as_deref(), &dcfg);
+    check_cancel(cancellation)?;
+
+    let original_estimate: usize = navigator
+        .records()
+        .iter()
+        .map(|record| (record.byte_size as usize) / 4)
+        .sum();
+    let compressed_tokens = digest.total_tokens;
+
+    let mut value = serde_json::to_value(digest)?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert("scan_result".to_string(), serde_json::to_value(&scan_result)?);
+    }
+    Ok((value, original_estimate, compressed_tokens))
 }
 
 /// Read modules and totals from one atomic statistics snapshot.
