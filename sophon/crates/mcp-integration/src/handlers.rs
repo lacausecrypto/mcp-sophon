@@ -132,18 +132,22 @@ fn authorize_path_with_root(
     root: &std::path::Path,
 ) -> anyhow::Result<PathBuf> {
     let root = std::fs::canonicalize(root)?;
-    let candidate = if path.exists() {
-        std::fs::canonicalize(path)?
-    } else {
-        let parent = path
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or_else(|| std::path::Path::new("."));
-        let parent = std::fs::canonicalize(parent)?;
-        parent.join(
-            path.file_name()
-                .ok_or_else(|| anyhow::anyhow!("missing filename"))?,
-        )
+    // Path::exists() returns false for dangling symlinks. Treating one as a
+    // new file could let a later write follow the link outside the workspace.
+    let candidate = match std::fs::symlink_metadata(path) {
+        Ok(_) => std::fs::canonicalize(path)?,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            let parent = path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| std::path::Path::new("."));
+            let parent = std::fs::canonicalize(parent)?;
+            parent.join(
+                path.file_name()
+                    .ok_or_else(|| anyhow::anyhow!("missing filename"))?,
+            )
+        }
+        Err(err) => return Err(err.into()),
     };
     anyhow::ensure!(
         candidate.starts_with(&root),
@@ -983,6 +987,23 @@ mod path_security_tests {
         fs::create_dir(&root).unwrap();
         let traversal = root.join("..").join("outside.txt");
         assert!(authorize_path_with_root(&traversal, &root).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_dangling_symlink_outside_allowed_root() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        fs::create_dir(&root).unwrap();
+        // The target does not exist yet. Path::exists() would return false
+        // for the link, but opening it for writing would follow it.
+        let future_outside = temp.path().join("future-secret.txt");
+        let link = root.join("dangling.txt");
+        symlink(&future_outside, &link).unwrap();
+        assert!(!link.exists());
+        assert!(fs::symlink_metadata(&link).is_ok());
+        assert!(authorize_path_with_root(&link, &root).is_err());
     }
 
     #[cfg(unix)]
