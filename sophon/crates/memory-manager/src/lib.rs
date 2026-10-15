@@ -334,3 +334,96 @@ impl MemoryManager {
         expand_memory(compressed, query, original_messages)
     }
 }
+
+
+#[cfg(test)]
+mod atomic_persistence_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn multi_message_append_roundtrips_as_legacy_jsonl() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut memory = MemoryManager::new(MemoryConfig::default())
+            .with_persistence(&path)
+            .unwrap();
+        memory
+            .try_append(vec![Message::user("first"), Message::assistant("second")])
+            .unwrap();
+        assert_eq!(memory.history_len(), 2);
+        let lines = fs::read_to_string(&path).unwrap();
+        assert_eq!(lines.lines().count(), 2);
+        assert!(lines.lines().all(|line| serde_json::from_str::<Message>(line).is_ok()));
+
+        let resumed = MemoryManager::new(MemoryConfig::default())
+            .with_persistence(&path)
+            .unwrap();
+        assert_eq!(resumed.history_len(), 2);
+    }
+
+    #[test]
+    fn failed_append_does_not_publish_uncommitted_ram_state() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut memory = MemoryManager::new(MemoryConfig::default())
+            .with_persistence(&path)
+            .unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(memory.try_append(vec![Message::user("must not commit")]).is_err());
+        assert_eq!(memory.history_len(), 0);
+        fs::remove_dir(&path).unwrap();
+        memory.try_append(vec![Message::user("committed")]).unwrap();
+        assert_eq!(memory.history_len(), 1);
+    }
+
+    #[test]
+    fn failed_reset_preserves_both_ram_history_and_previous_disk_snapshot() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let backup = dir.path().join("saved.jsonl");
+        let mut memory = MemoryManager::new(MemoryConfig::default())
+            .with_persistence(&path)
+            .unwrap();
+        memory.try_append(vec![Message::user("do not lose")]).unwrap();
+        let old = fs::read(&path).unwrap();
+        fs::rename(&path, &backup).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(memory.try_reset().is_err());
+        assert_eq!(memory.history_len(), 1);
+        fs::remove_dir(&path).unwrap();
+        fs::rename(&backup, &path).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), old);
+    }
+
+    #[test]
+    fn reset_with_messages_commits_one_replacement_and_cleans_corrupt_tail() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut memory = MemoryManager::new(MemoryConfig::default())
+            .with_persistence(&path)
+            .unwrap();
+        memory.try_append(vec![Message::user("old")]).unwrap();
+        memory
+            .try_replace(vec![Message::assistant("new"), Message::user("another")])
+            .unwrap();
+        assert_eq!(memory.history_len(), 2);
+        let resumed = MemoryManager::new(MemoryConfig::default())
+            .with_persistence(&path)
+            .unwrap();
+        assert_eq!(resumed.history_len(), 2);
+        assert_eq!(resumed.history[0].content, "new");
+
+        let mut broken = fs::read(&path).unwrap();
+        broken.extend_from_slice(b"{\\\"incomplete");
+        fs::write(&path, broken).unwrap();
+        let mut recovered = MemoryManager::new(MemoryConfig::default())
+            .with_persistence(&path)
+            .unwrap();
+        assert_eq!(recovered.history_len(), 2);
+        recovered.try_append(vec![Message::user("repaired")]).unwrap();
+        let raw = fs::read_to_string(&path).unwrap();
+        assert_eq!(raw.lines().count(), 3);
+        assert!(raw.lines().all(|line| serde_json::from_str::<Message>(line).is_ok()));
+    }
+}
