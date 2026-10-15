@@ -14,7 +14,11 @@ pub mod reconstructor;
 pub mod summarizer;
 pub mod tail_summary;
 
-use std::{fs, io, io::{Read, Seek, SeekFrom, Write}, path::PathBuf};
+use std::{
+    fs, io,
+    io::{Read, Seek, SeekFrom, Write},
+    path::PathBuf,
+};
 
 pub use fact_cards::{extract_fact_cards, FactCards, FactEvent};
 pub use fact_extractor::extract_facts;
@@ -311,7 +315,10 @@ impl MemoryManager {
                 let mut record = serde_json::to_value(message)
                     .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
                 let Some(object) = record.as_object_mut() else {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData, "message must be an object"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "message must be an object",
+                    ));
                 };
                 object.insert(
                     "_sophon_txn".to_string(),
