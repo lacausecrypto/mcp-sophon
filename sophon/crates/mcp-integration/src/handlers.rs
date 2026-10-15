@@ -487,7 +487,11 @@ pub fn handle_tool_call(
             // Resolve the root: explicit arg > cached root.
             let root_to_scan = match args.root.as_deref() {
                 Some(p) => Some(authorize_path(std::path::Path::new(p))?),
-                None => server.codebase_navigator.root().cloned(),
+                None => server
+                    .codebase_navigator
+                    .root()
+                    .map(|root| authorize_path(root.as_path()))
+                    .transpose()?,
             };
 
             // `force_rescan` clears the incremental cache so the next
@@ -1004,6 +1008,20 @@ mod path_security_tests {
         assert!(!link.exists());
         assert!(fs::symlink_metadata(&link).is_ok());
         assert!(authorize_path_with_root(&link, &root).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_new_file_via_symlinked_parent_outside_root() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        let outside = temp.path().join("other");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&outside).unwrap();
+        let link = root.join("linked-dir");
+        symlink(&outside, &link).unwrap();
+        assert!(authorize_path_with_root(&link.join("new.txt"), &root).is_err());
     }
 
     #[cfg(unix)]
