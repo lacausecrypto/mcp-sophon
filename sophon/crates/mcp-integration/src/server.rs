@@ -466,9 +466,8 @@ impl SophonServer {
             graph: self.graph_memory.take(),
         }));
         let independent_retriever = Arc::new(StdMutex::new(self.retriever.take()));
-        let independent_prompt = Arc::new(StdMutex::new(std::mem::take(
-            &mut self.prompt_compressor,
-        )));
+        let independent_prompt =
+            Arc::new(StdMutex::new(std::mem::take(&mut self.prompt_compressor)));
         let server = Arc::new(Mutex::new(self));
         let max_active = std::env::var("SOPHON_MAX_CONCURRENT_TOOLS")
             .ok()
