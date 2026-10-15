@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use sophon_core::tokens::count_tokens;
 use tokio_util::sync::CancellationToken;
 
-use crate::server::SophonServer;
+use crate::server::{SophonServer, StatsCollector};
 
 #[derive(Debug, Deserialize)]
 struct CompressPromptArgs {
@@ -166,6 +166,7 @@ pub(crate) fn independent_tool_call(
     name: &str,
     arguments: Value,
     output_compressor: &output_compressor::OutputCompressor,
+    stats: &StatsCollector,
 ) -> Option<IndependentToolResult> {
     match name {
         "count_tokens" => Some((|| {
@@ -179,8 +180,12 @@ pub(crate) fn independent_tool_call(
         "compress_output" => Some((|| {
             let args: CompressOutputArgs = serde_json::from_value(arguments)?;
             let result = output_compressor.compress(&args.command, &args.output);
-            let stats = (result.original_tokens, result.compressed_tokens);
-            Ok((serde_json::to_value(result)?, Some(stats)))
+            let accounting = (result.original_tokens, result.compressed_tokens);
+            Ok((serde_json::to_value(result)?, Some(accounting)))
+        })()),
+        "get_token_stats" => Some((|| {
+            let value = get_token_stats_value(stats, arguments)?;
+            Ok((value, None))
         })()),
         _ => None,
     }
@@ -612,26 +617,27 @@ pub(crate) fn handle_tool_call_with_cancel(
             }
             Ok(value)
         }
-        "get_token_stats" => {
-            let args: StatsArgs = serde_json::from_value(arguments)?;
-            let period = args.period.unwrap_or_else(|| "session".to_string());
-            let modules = server.stats.snapshot();
-            let totals = server.stats.totals();
-            // compressed / original, clamped to [0.0, 1.0]. Lower is better.
-            let ratio = if totals.original_tokens == 0 {
-                1.0
-            } else {
-                (totals.compressed_tokens as f64 / totals.original_tokens as f64).min(1.0)
-            };
-            Ok(json!({
-                "period": period,
-                "modules": modules,
-                "totals": totals,
-                "compression_ratio": ratio,
-            }))
-        }
+        "get_token_stats" => get_token_stats_value(&server.stats, arguments),
         _ => Err(anyhow::anyhow!("unknown tool: {}", name)),
     }
+}
+
+/// Read modules and totals from one atomic statistics snapshot.
+fn get_token_stats_value(stats: &StatsCollector, arguments: Value) -> anyhow::Result<Value> {
+    let args: StatsArgs = serde_json::from_value(arguments)?;
+    let period = args.period.unwrap_or_else(|| "session".to_string());
+    let (modules, totals) = stats.snapshot_and_totals();
+    let ratio = if totals.original_tokens == 0 {
+        1.0
+    } else {
+        (totals.compressed_tokens as f64 / totals.original_tokens as f64).min(1.0)
+    };
+    Ok(json!({
+        "period": period,
+        "modules": modules,
+        "totals": totals,
+        "compression_ratio": ratio,
+    }))
 }
 
 /// Compute per-section semantic similarity scores using the embedder
@@ -1149,7 +1155,7 @@ mod phase1_concurrency_tests {
             .handle_tool_call("compress_output", args.clone())
             .unwrap();
         let (independent, stats) =
-            independent_tool_call("compress_output", args, &server.output_compressor)
+            independent_tool_call("compress_output", args, &server.output_compressor, &server.stats)
                 .unwrap()
                 .unwrap();
         assert_eq!(independent, expected);
@@ -1160,7 +1166,7 @@ mod phase1_concurrency_tests {
             .handle_tool_call("count_tokens", args.clone())
             .unwrap();
         let (independent, stats) =
-            independent_tool_call("count_tokens", args, &server.output_compressor)
+            independent_tool_call("count_tokens", args, &server.output_compressor, &server.stats)
                 .unwrap()
                 .unwrap();
         assert_eq!(independent, expected);
