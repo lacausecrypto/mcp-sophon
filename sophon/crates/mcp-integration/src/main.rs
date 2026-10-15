@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
     RuntimeFlags::from_env().log_warnings();
 
     let cfg = SophonConfig::resolve(config_path.as_deref().map(std::path::Path::new))?;
-    let mut server = SophonServer::with_config(cfg);
+    let server = SophonServer::with_config(cfg);
 
     match command {
         "serve" => {
