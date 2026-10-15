@@ -567,14 +567,9 @@ impl SophonServer {
                 let fragments_for_gate = Arc::clone(&fragment_gate);
                 let tool_name = parsed.pointer("/params/name").and_then(Value::as_str);
                 let navigator_call = tool_name == Some("navigate_codebase");
-                let delta_call = matches!(
-                    tool_name,
-                    Some("read_file_delta" | "write_file_delta")
-                );
-                let fragment_call = matches!(
-                    tool_name,
-                    Some("encode_fragments" | "decode_fragments")
-                );
+                let delta_call = matches!(tool_name, Some("read_file_delta" | "write_file_delta"));
+                let fragment_call =
+                    matches!(tool_name, Some("encode_fragments" | "decode_fragments"));
                 let independent = matches!(
                     tool_name,
                     Some(
@@ -744,9 +739,8 @@ impl SophonServer {
                                 .cloned()
                                 .unwrap_or_else(|| json!({}));
                             let result = if delta_call {
-                                let mut delta = delta_for_task
-                                    .lock()
-                                    .unwrap_or_else(|err| err.into_inner());
+                                let mut delta =
+                                    delta_for_task.lock().unwrap_or_else(|err| err.into_inner());
                                 crate::handlers::run_delta_tool(
                                     &mut delta,
                                     &worker_stats,
@@ -890,19 +884,15 @@ impl SophonServer {
                             let mut navigator = independent_navigator
                                 .lock()
                                 .unwrap_or_else(|err| err.into_inner());
-                            crate::handlers::run_navigate_codebase(
-                                &mut navigator,
-                                arguments,
-                                None,
-                            )
-                            .map(|(value, original, compressed)| {
-                                independent_stats.record(
-                                    "codebase_navigator",
-                                    original,
-                                    compressed,
-                                );
-                                value
-                            })
+                            crate::handlers::run_navigate_codebase(&mut navigator, arguments, None)
+                                .map(|(value, original, compressed)| {
+                                    independent_stats.record(
+                                        "codebase_navigator",
+                                        original,
+                                        compressed,
+                                    );
+                                    value
+                                })
                         }
                         "read_file_delta" | "write_file_delta" => {
                             let mut delta = independent_delta
