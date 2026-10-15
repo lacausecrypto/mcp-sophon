@@ -295,39 +295,39 @@ pub(crate) fn run_prompt_tool(
     cancellation: Option<&CancellationToken>,
 ) -> anyhow::Result<Value> {
     check_cancel(cancellation)?;
-            let args: CompressPromptArgs = serde_json::from_value(arguments)?;
+    let args: CompressPromptArgs = serde_json::from_value(arguments)?;
 
-            // When a semantic embedder is available (via the retriever),
-            // compute per-section cosine similarity scores so the compressor
-            // can include sections that match semantically even without a
-            // keyword hit (e.g. "loop" ≈ "iteration").
-            let section_scores = compute_section_scores(compressor, retriever, &args.prompt, &args.query);
+    // When a semantic embedder is available (via the retriever),
+    // compute per-section cosine similarity scores so the compressor
+    // can include sections that match semantically even without a
+    // keyword hit (e.g. "loop" ≈ "iteration").
+    let section_scores = compute_section_scores(compressor, retriever, &args.prompt, &args.query);
 
-            check_cancel(cancellation)?;
-            let parsed = compressor
-                .compress_with_scores(
-                    &args.prompt,
-                    &args.query,
-                    None,
-                    args.max_tokens,
-                    section_scores.as_ref(),
-                )
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    check_cancel(cancellation)?;
+    let parsed = compressor
+        .compress_with_scores(
+            &args.prompt,
+            &args.query,
+            None,
+            args.max_tokens,
+            section_scores.as_ref(),
+        )
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
-            check_cancel(cancellation)?;
-            stats.record(
-                "prompt_compressor",
-                count_tokens(&args.prompt),
-                parsed.token_count,
-            );
+    check_cancel(cancellation)?;
+    stats.record(
+        "prompt_compressor",
+        count_tokens(&args.prompt),
+        parsed.token_count,
+    );
 
-            Ok(json!({
-                "compressed_prompt": parsed.compressed_prompt,
-                "token_count": parsed.token_count,
-                "included_sections": parsed.included_sections,
-                "excluded_sections": parsed.excluded_sections,
-                "compression_ratio": parsed.compression_ratio,
-            }))
+    Ok(json!({
+        "compressed_prompt": parsed.compressed_prompt,
+        "token_count": parsed.token_count,
+        "included_sections": parsed.included_sections,
+        "excluded_sections": parsed.excluded_sections,
+        "compression_ratio": parsed.compression_ratio,
+    }))
 }
 
 pub(crate) fn run_history_tool(
@@ -339,133 +339,133 @@ pub(crate) fn run_history_tool(
     cancellation: Option<&CancellationToken>,
 ) -> anyhow::Result<Value> {
     check_cancel(cancellation)?;
-            let args: CompressHistoryArgs = serde_json::from_value(arguments)?;
-            let query = args.query.clone();
-            let retrieval_top_k = args.retrieval_top_k;
+    let args: CompressHistoryArgs = serde_json::from_value(arguments)?;
+    let query = args.query.clone();
+    let retrieval_top_k = args.retrieval_top_k;
 
-            let messages = args
-                .messages
-                .into_iter()
-                .map(|m| Message::new(parse_role(&m.role), m.content))
-                .collect::<Vec<_>>();
+    let messages = args
+        .messages
+        .into_iter()
+        .map(|m| Message::new(parse_role(&m.role), m.content))
+        .collect::<Vec<_>>();
 
-            let compressed = memory.compress_with_overrides(
-                &messages,
-                args.max_tokens,
-                args.recent_window,
-            );
+    let compressed = memory.compress_with_overrides(
+        &messages,
+        args.max_tokens,
+        args.recent_window,
+    );
 
-            check_cancel(cancellation)?;
-            let original_tokens: usize = messages.iter().map(|m| m.token_count).sum();
-            stats
-                .record("memory_manager", original_tokens, compressed.token_count);
+    check_cancel(cancellation)?;
+    let original_tokens: usize = messages.iter().map(|m| m.token_count).sum();
+    stats
+        .record("memory_manager", original_tokens, compressed.token_count);
 
-            // Optional retrieval pass: index incrementally, then look up the
-            // top-k chunks for the query. No-op if the retriever is off or
-            // the caller didn't pass a query.
-            let retrieval_value = run_retrieval(
-                retriever,
-                stats,
-                &messages,
-                query.as_deref(),
-                retrieval_top_k,
-                cancellation,
-            )?;
+    // Optional retrieval pass: index incrementally, then look up the
+    // top-k chunks for the query. No-op if the retriever is off or
+    // the caller didn't pass a query.
+    let retrieval_value = run_retrieval(
+        retriever,
+        stats,
+        &messages,
+        query.as_deref(),
+        retrieval_top_k,
+        cancellation,
+    )?;
 
-            // Path A: pure-Rust graph query. Runs when graph memory is
-            // active AND a query is provided. Zero LLM calls at this
-            // step — all the extraction work was done at update_memory.
-            let graph_facts_value =
-                if let (Some(graph), Some(q)) = (graph.as_ref(), query.as_deref()) {
-                    let top_k = retrieval_top_k.unwrap_or(8);
-                    let hits = query_graph(graph, q, top_k);
-                    if hits.is_empty() {
-                        None
-                    } else {
-                        let rendered = render_facts(&hits);
-                        Some(json!({
-                            "rendered": rendered,
-                            "fact_count": hits.len(),
-                            "top_score": hits.first().map(|s| s.score).unwrap_or(0.0),
-                        }))
-                    }
-                } else {
-                    None
-                };
-
-            // Optional fact-card extraction (SOPHON_FACT_CARDS=1). Entity-
-            // indexed timeline produced via one extra Haiku call. Rendered
-            // into the response as a structured block the downstream LLM
-            // can pattern-match on for temporal / single-hop questions.
-            let fact_cards_on = std::env::var("SOPHON_FACT_CARDS")
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false);
-            check_cancel(cancellation)?;
-            let fact_cards_value = if fact_cards_on {
-                extract_fact_cards(&messages).and_then(|fc| {
-                    if fc.is_empty() {
-                        None
-                    } else {
-                        let rendered = fc.render();
-                        Some(json!({
-                            "rendered": rendered,
-                            "entity_count": fc.entities.len(),
-                            "event_count": fc.entities.values().map(|v| v.len()).sum::<usize>(),
-                        }))
-                    }
-                })
-            } else {
+    // Path A: pure-Rust graph query. Runs when graph memory is
+    // active AND a query is provided. Zero LLM calls at this
+    // step — all the extraction work was done at update_memory.
+    let graph_facts_value =
+        if let (Some(graph), Some(q)) = (graph.as_ref(), query.as_deref()) {
+            let top_k = retrieval_top_k.unwrap_or(8);
+            let hits = query_graph(graph, q, top_k);
+            if hits.is_empty() {
                 None
-            };
+            } else {
+                let rendered = render_facts(&hits);
+                Some(json!({
+                    "rendered": rendered,
+                    "fact_count": hits.len(),
+                    "top_score": hits.first().map(|s| s.score).unwrap_or(0.0),
+                }))
+            }
+        } else {
+            None
+        };
 
-            check_cancel(cancellation)?;
-            // Strip the dense SemanticIndex (embeddings blow up the payload
-            // orders of magnitude past the input). Opt-in with include_index.
-            let mut value = json!({
-                "summary": compressed.summary,
-                "stable_facts": compressed.stable_facts,
-                "recent_messages": compressed.recent_messages,
-                "token_count": compressed.token_count,
-                "original_message_count": compressed.original_message_count,
-            });
-            if args.include_index {
-                value["index"] = serde_json::to_value(&compressed.index)?;
+    // Optional fact-card extraction (SOPHON_FACT_CARDS=1). Entity-
+    // indexed timeline produced via one extra Haiku call. Rendered
+    // into the response as a structured block the downstream LLM
+    // can pattern-match on for temporal / single-hop questions.
+    let fact_cards_on = std::env::var("SOPHON_FACT_CARDS")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    check_cancel(cancellation)?;
+    let fact_cards_value = if fact_cards_on {
+        extract_fact_cards(&messages).and_then(|fc| {
+            if fc.is_empty() {
+                None
+            } else {
+                let rendered = fc.render();
+                Some(json!({
+                    "rendered": rendered,
+                    "entity_count": fc.entities.len(),
+                    "event_count": fc.entities.values().map(|v| v.len()).sum::<usize>(),
+                }))
             }
-            if let Some(retrieval) = retrieval_value {
-                // Add a retrieval_confidence signal so the caller can adjust
-                // its prompt: "low" means the retrieved chunks are weakly
-                // relevant (all scores < 0.3) and the LLM should be told to
-                // say "Not answerable" rather than guess. This fixes the
-                // adversarial question failure mode from the N=40 bench.
-                let confidence = if let Some(chunks) = retrieval.get("chunks") {
-                    let scores: Vec<f32> = chunks
-                        .as_array()
-                        .unwrap_or(&vec![])
-                        .iter()
-                        .filter_map(|c| c.get("score").and_then(|s| s.as_f64()))
-                        .map(|s| s as f32)
-                        .collect();
-                    let max_score = scores.iter().copied().fold(0.0f32, f32::max);
-                    if max_score >= 0.5 {
-                        "high"
-                    } else if max_score >= 0.3 {
-                        "medium"
-                    } else {
-                        "low"
-                    }
-                } else {
-                    "none"
-                };
-                value["retrieved_chunks"] = retrieval;
-                value["retrieval_confidence"] = json!(confidence);
+        })
+    } else {
+        None
+    };
+
+    check_cancel(cancellation)?;
+    // Strip the dense SemanticIndex (embeddings blow up the payload
+    // orders of magnitude past the input). Opt-in with include_index.
+    let mut value = json!({
+        "summary": compressed.summary,
+        "stable_facts": compressed.stable_facts,
+        "recent_messages": compressed.recent_messages,
+        "token_count": compressed.token_count,
+        "original_message_count": compressed.original_message_count,
+    });
+    if args.include_index {
+        value["index"] = serde_json::to_value(&compressed.index)?;
+    }
+    if let Some(retrieval) = retrieval_value {
+        // Add a retrieval_confidence signal so the caller can adjust
+        // its prompt: "low" means the retrieved chunks are weakly
+        // relevant (all scores < 0.3) and the LLM should be told to
+        // say "Not answerable" rather than guess. This fixes the
+        // adversarial question failure mode from the N=40 bench.
+        let confidence = if let Some(chunks) = retrieval.get("chunks") {
+            let scores: Vec<f32> = chunks
+                .as_array()
+                .unwrap_or(&vec![])
+                .iter()
+                .filter_map(|c| c.get("score").and_then(|s| s.as_f64()))
+                .map(|s| s as f32)
+                .collect();
+            let max_score = scores.iter().copied().fold(0.0f32, f32::max);
+            if max_score >= 0.5 {
+                "high"
+            } else if max_score >= 0.3 {
+                "medium"
+            } else {
+                "low"
             }
-            if let Some(fc) = fact_cards_value {
-                value["fact_cards"] = fc;
-            }
-            if let Some(gf) = graph_facts_value {
-                value["graph_facts"] = gf;
-            }
-            Ok(value)
+        } else {
+            "none"
+        };
+        value["retrieved_chunks"] = retrieval;
+        value["retrieval_confidence"] = json!(confidence);
+    }
+    if let Some(fc) = fact_cards_value {
+        value["fact_cards"] = fc;
+    }
+    if let Some(gf) = graph_facts_value {
+        value["graph_facts"] = gf;
+    }
+    Ok(value)
 }
 
 pub(crate) fn run_update_memory_tool(
@@ -476,84 +476,84 @@ pub(crate) fn run_update_memory_tool(
     cancellation: Option<&CancellationToken>,
 ) -> anyhow::Result<Value> {
     check_cancel(cancellation)?;
-            let args: UpdateMemoryArgs = serde_json::from_value(arguments).unwrap_or_default();
+    let args: UpdateMemoryArgs = serde_json::from_value(arguments).unwrap_or_default();
 
-            if args.reset {
-                memory.reset();
-            }
+    if args.reset {
+        memory.reset();
+    }
 
-            let mut graph_ingest_summary: Option<Value> = None;
-            if !args.messages.is_empty() {
-                let new_msgs = args
-                    .messages
-                    .into_iter()
-                    .map(|m| Message::new(parse_role(&m.role), m.content))
-                    .collect::<Vec<_>>();
+    let mut graph_ingest_summary: Option<Value> = None;
+    if !args.messages.is_empty() {
+        let new_msgs = args
+            .messages
+            .into_iter()
+            .map(|m| Message::new(parse_role(&m.role), m.content))
+            .collect::<Vec<_>>();
 
-                // Path A: if graph memory is active, extract triples
-                // from the NEW batch before appending. One Haiku call
-                // per update_memory — the only LLM cost of the graph
-                // path; query time stays pure Rust.
-                if let Some(graph) = graph.as_mut() {
-                    let chunk_id = format!("update-{}", Utc::now().timestamp_millis());
-                    let now = Utc::now().to_rfc3339();
-                    // Parallelised extraction via rayon — up to N×
-                    // speed-up on long batches (one Haiku call per
-                    // ~30-message slice, run concurrently).
-                    let report = ingest_messages_batched(graph, &new_msgs, &chunk_id, &now, None);
-                    let _ = graph.save(); // best-effort persistence
-                    graph_ingest_summary = Some(json!({
-                        "triples_seen": report.triples_seen,
-                        "new_facts": report.new_facts,
-                        "merged_facts": report.merged_facts,
-                        "new_entities": report.new_entities,
-                        "fact_total": graph.fact_count(),
-                        "entity_total": graph.entity_count(),
-                    }));
-                }
+        // Path A: if graph memory is active, extract triples
+        // from the NEW batch before appending. One Haiku call
+        // per update_memory — the only LLM cost of the graph
+        // path; query time stays pure Rust.
+        if let Some(graph) = graph.as_mut() {
+            let chunk_id = format!("update-{}", Utc::now().timestamp_millis());
+            let now = Utc::now().to_rfc3339();
+            // Parallelised extraction via rayon — up to N×
+            // speed-up on long batches (one Haiku call per
+            // ~30-message slice, run concurrently).
+            let report = ingest_messages_batched(graph, &new_msgs, &chunk_id, &now, None);
+            let _ = graph.save(); // best-effort persistence
+            graph_ingest_summary = Some(json!({
+                "triples_seen": report.triples_seen,
+                "new_facts": report.new_facts,
+                "merged_facts": report.merged_facts,
+                "new_entities": report.new_entities,
+                "fact_total": graph.fact_count(),
+                "entity_total": graph.entity_count(),
+            }));
+        }
 
-                memory.append(new_msgs);
-            }
+        memory.append(new_msgs);
+    }
 
-            let return_snapshot = args.return_snapshot.unwrap_or(true);
-            if !return_snapshot {
-                let mut resp = json!({
-                    "appended": true,
-                    "history_len": memory.history_len(),
-                });
-                if let Some(g) = graph_ingest_summary.clone() {
-                    resp["graph_ingest"] = g;
-                }
-                return Ok(resp);
-            }
+    let return_snapshot = args.return_snapshot.unwrap_or(true);
+    if !return_snapshot {
+        let mut resp = json!({
+            "appended": true,
+            "history_len": memory.history_len(),
+        });
+        if let Some(g) = graph_ingest_summary.clone() {
+            resp["graph_ingest"] = g;
+        }
+        return Ok(resp);
+    }
 
-            let compressed = memory.snapshot();
-            stats.record(
-                "memory_manager",
-                compressed
-                    .recent_messages
-                    .iter()
-                    .map(|m| m.token_count)
-                    .sum::<usize>()
-                    .max(compressed.token_count),
-                compressed.token_count,
-            );
+    let compressed = memory.snapshot();
+    stats.record(
+        "memory_manager",
+        compressed
+            .recent_messages
+            .iter()
+            .map(|m| m.token_count)
+            .sum::<usize>()
+            .max(compressed.token_count),
+        compressed.token_count,
+    );
 
-            let mut value = json!({
-                "summary": compressed.summary,
-                "stable_facts": compressed.stable_facts,
-                "recent_messages": compressed.recent_messages,
-                "token_count": compressed.token_count,
-                "original_message_count": compressed.original_message_count,
-                "history_len": memory.history_len(),
-            });
-            if args.include_index {
-                value["index"] = serde_json::to_value(&compressed.index)?;
-            }
-            if let Some(g) = graph_ingest_summary {
-                value["graph_ingest"] = g;
-            }
-            Ok(value)
+    let mut value = json!({
+        "summary": compressed.summary,
+        "stable_facts": compressed.stable_facts,
+        "recent_messages": compressed.recent_messages,
+        "token_count": compressed.token_count,
+        "original_message_count": compressed.original_message_count,
+        "history_len": memory.history_len(),
+    });
+    if args.include_index {
+        value["index"] = serde_json::to_value(&compressed.index)?;
+    }
+    if let Some(g) = graph_ingest_summary {
+        value["graph_ingest"] = g;
+    }
+    Ok(value)
 }
 
 /// One delta-streamer transaction: the file state store and the filesystem
