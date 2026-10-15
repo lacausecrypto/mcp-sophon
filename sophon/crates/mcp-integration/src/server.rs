@@ -855,11 +855,14 @@ fn tool_result_response(id: Value, result: anyhow::Result<Value>) -> Value {
 
 /// Execute pure tools without locking mutable state, returning the module's
 /// accounting delta for a separate short stats transaction.
+type ToolAccounting = (&'static str, usize, usize);
+type IndependentRpcResponse = (Value, Option<ToolAccounting>);
+
 fn independent_rpc_response(
     message: &Value,
     output: &OutputCompressor,
     stats: &StatsCollector,
-) -> Option<(Value, Option<(&'static str, usize, usize)>)> {
+) -> Option<IndependentRpcResponse> {
     let name = message.pointer("/params/name")?.as_str()?;
     let arguments = message
         .pointer("/params/arguments")
