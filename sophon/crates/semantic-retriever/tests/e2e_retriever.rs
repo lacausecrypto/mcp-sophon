@@ -48,16 +48,31 @@ fn cancelled_index_preflight_keeps_disk_and_memory_unmodified() {
     let path = dir.path().join("chunks.jsonl");
     let mut retriever = Retriever::open(cfg_with_path(path.clone())).unwrap();
     let messages = vec![
-        msg(0, ChunkInputRole::User, "One unique statement about historic Belgium."),
-        msg(1, ChunkInputRole::User, "Another unrelated statement about quantum data."),
-        msg(2, ChunkInputRole::User, "A third separate statement about a rust compiler."),
+        msg(
+            0,
+            ChunkInputRole::User,
+            "One unique statement about historic Belgium.",
+        ),
+        msg(
+            1,
+            ChunkInputRole::User,
+            "Another unrelated statement about quantum data.",
+        ),
+        msg(
+            2,
+            ChunkInputRole::User,
+            "A third separate statement about a rust compiler.",
+        ),
     ];
     let checks = Cell::new(0usize);
     let result = retriever.index_messages_with_cancel(&messages, || {
         checks.set(checks.get() + 1);
         checks.get() >= 3
     });
-    assert!(matches!(result, Err(semantic_retriever::RetrieverError::Cancelled)));
+    assert!(matches!(
+        result,
+        Err(semantic_retriever::RetrieverError::Cancelled)
+    ));
     assert_eq!(retriever.store_len(), 0);
     assert_eq!(retriever.index_len(), 0);
     assert_eq!(Retriever::open(cfg_with_path(path)).unwrap().store_len(), 0);
@@ -97,9 +112,21 @@ fn failed_embedding_in_batch_does_not_persist_a_prefix() {
     )
     .unwrap();
     let messages = vec![
-        msg(0, ChunkInputRole::User, "A completely separate first statement about Paris."),
-        msg(1, ChunkInputRole::User, "A completely separate second statement about photosynthesis."),
-        msg(2, ChunkInputRole::User, "A completely separate third statement about Rust."),
+        msg(
+            0,
+            ChunkInputRole::User,
+            "A completely separate first statement about Paris.",
+        ),
+        msg(
+            1,
+            ChunkInputRole::User,
+            "A completely separate second statement about photosynthesis.",
+        ),
+        msg(
+            2,
+            ChunkInputRole::User,
+            "A completely separate third statement about Rust.",
+        ),
     ];
     assert!(retriever.index_messages(&messages).is_err());
     assert_eq!(retriever.store_len(), 0);
