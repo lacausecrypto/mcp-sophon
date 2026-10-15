@@ -74,8 +74,12 @@ jobs:
             | ./target/release/sophon serve
 
   npm-lint:
-    name: npm wrapper lint
-    runs-on: ubuntu-latest
+    name: npm wrapper lint (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     defaults:
       run:
         working-directory: npm
