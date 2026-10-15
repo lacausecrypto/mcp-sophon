@@ -1100,3 +1100,64 @@ mod path_security_tests {
         assert!(authorize_path_with_root(&link, &root).is_err());
     }
 }
+
+#[cfg(test)]
+mod phase1_concurrency_tests {
+    use super::*;
+
+    #[test]
+    fn cancellation_before_mutation_preserves_memory() {
+        let mut server = SophonServer::new();
+        server
+            .handle_tool_call(
+                "update_memory",
+                json!({
+                    "messages": [{"role": "user", "content": "original state"}],
+                    "return_snapshot": false
+                }),
+            )
+            .unwrap();
+
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        let result = handle_tool_call_with_cancel(
+            &mut server,
+            "update_memory",
+            json!({"reset": true, "return_snapshot": false}),
+            Some(&cancelled),
+        );
+
+        assert!(result.is_err());
+        assert_eq!(server.memory_manager.history_len(), 1);
+    }
+
+    #[test]
+    fn stateless_path_matches_regular_tool_response() {
+        let mut server = SophonServer::new();
+        let args = json!({"command": "cargo test", "output": "test result: ok\\n"});
+        let expected = server
+            .handle_tool_call("compress_output", args.clone())
+            .unwrap();
+        let (independent, stats) = independent_tool_call(
+            "compress_output",
+            args,
+            &server.output_compressor,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(independent, expected);
+        assert!(stats.is_some());
+
+        let args = json!({"text": "Sophon parallel tokens"});
+        let expected = server.handle_tool_call("count_tokens", args.clone()).unwrap();
+        let (independent, stats) = independent_tool_call(
+            "count_tokens",
+            args,
+            &server.output_compressor,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(independent, expected);
+        assert!(stats.is_none());
+    }
+}
