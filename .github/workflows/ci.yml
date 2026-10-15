@@ -50,18 +50,18 @@ jobs:
           workspaces: sophon
 
       - name: cargo clippy
-        run: cargo clippy --workspace --all-targets --keep-going -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked --keep-going -- -D warnings
 
       # Continue tests and the release build after a lint failure so each
       # failing CI run reports actionable diagnostics from all stages.
       - name: cargo test
         if: ${{ !cancelled() }}
-        run: cargo test --workspace --no-fail-fast
+        run: cargo test --workspace --locked --no-fail-fast
 
       - name: cargo build --release
         id: release_build
         if: ${{ !cancelled() }}
-        run: cargo build --release -p mcp-integration
+        run: cargo build --release --locked -p mcp-integration
 
       - name: smoke test — sophon serve
         if: ${{ !cancelled() && steps.release_build.outcome == 'success' }}
