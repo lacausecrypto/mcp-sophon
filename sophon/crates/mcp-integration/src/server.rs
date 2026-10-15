@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use codebase_navigator::{Navigator, NavigatorConfig};
 use delta_streamer::DeltaStreamer;
@@ -8,7 +9,7 @@ use memory_manager::MemoryManager;
 use output_compressor::OutputCompressor;
 use prompt_compressor::PromptCompressor;
 use semantic_retriever::{Retriever, RetrieverConfig};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{json, Value};
 
 use crate::{config::SophonConfig, handlers::handle_tool_call, tools::get_tool_definitions};
@@ -422,13 +423,13 @@ impl SophonServer {
 
     pub async fn run_stdio(self) -> anyhow::Result<()> {
         use crate::jsonrpc::{error_response, PARSE_ERROR};
-        use std::sync::Arc;
         use tokio::io::{self, AsyncBufReadExt, BufReader};
         use tokio::sync::{Mutex, Semaphore};
 
         // Stateless computations use a snapshot; stateful mutations remain
         // serialized to preserve their existing transaction boundaries.
         let independent_output = Arc::new(self.output_compressor.clone());
+        let independent_stats = self.stats.clone();
         let server = Arc::new(Mutex::new(self));
         let max_active = std::env::var("SOPHON_MAX_CONCURRENT_TOOLS")
             .ok()
@@ -534,6 +535,7 @@ impl SophonServer {
                 let slots_for_task = Arc::clone(&slots);
                 let stateful_for_task = Arc::clone(&stateful_gate);
                 let output_for_task = Arc::clone(&independent_output);
+                let stats_for_task = independent_stats.clone();
                 let independent = matches!(
                     parsed.pointer("/params/name").and_then(Value::as_str),
                     Some("count_tokens" | "compress_output")
@@ -590,7 +592,7 @@ impl SophonServer {
                             return Ok((None, None));
                         }
                         if let Some((response, stats)) =
-                            independent_rpc_response(&parsed, &output_for_task)
+                            independent_rpc_response(&parsed, &output_for_task, &stats_for_task)
                         {
                             return Ok((Some(response), stats));
                         }
@@ -641,16 +643,10 @@ impl SophonServer {
                         None => (None, None),
                     };
 
-                    // Commit stats without modifying the result; the stateful
-                    // dispatcher is still the sole owner of mutable statistics.
+                    // Stats use an independent short critical section.
                     if let Some((original, compressed)) = stats {
-                        server_for_task.lock().await.stats.record(
-                            "output_compressor",
-                            original,
-                            compressed,
-                        );
+                        stats_for_task.record("output_compressor", original, compressed);
                     }
-                    pending_for_task.lock().await.remove(&id_key);
                     if !token.is_cancelled() {
                         if let Some(response) = response {
                             if let Err(err) = write_response(&out_for_task, &response).await {
@@ -658,6 +654,8 @@ impl SophonServer {
                             }
                         }
                     }
+                    // Retain request ID until the response is written.
+                    pending_for_task.lock().await.remove(&id_key);
                 });
                 continue;
             }
@@ -723,13 +721,14 @@ impl SophonServer {
 fn independent_rpc_response(
     message: &Value,
     output: &OutputCompressor,
+    stats: &StatsCollector,
 ) -> Option<(Value, Option<(usize, usize)>)> {
     let name = message.pointer("/params/name")?.as_str()?;
     let arguments = message
         .pointer("/params/arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let result = crate::handlers::independent_tool_call(name, arguments, output)?;
+    let result = crate::handlers::independent_tool_call(name, arguments, output, stats)?;
     let id = message.get("id").cloned().unwrap_or(Value::Null);
     Some(match result {
         Ok((value, stats)) => {
@@ -824,9 +823,35 @@ async fn write_response(
     Ok(())
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+/// Shared token accounting is independent of expensive module locks.
+#[derive(Debug, Default, Clone)]
 pub struct StatsCollector {
-    per_module: HashMap<String, ModuleStats>,
+    per_module: Arc<StdMutex<HashMap<String, ModuleStats>>>,
+}
+
+/// Preserve the legacy JSON representation for callers using serde.
+impl Serialize for StatsCollector {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Snapshot<'a> {
+            per_module: &'a HashMap<String, ModuleStats>,
+        }
+        let guard = self.per_module.lock().unwrap_or_else(|e| e.into_inner());
+        Snapshot { per_module: &guard }.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for StatsCollector {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Snapshot {
+            per_module: HashMap<String, ModuleStats>,
+        }
+        let snapshot = Snapshot::deserialize(deserializer)?;
+        Ok(Self {
+            per_module: Arc::new(StdMutex::new(snapshot.per_module)),
+        })
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -846,25 +871,60 @@ fn expand_tilde(path: &str) -> std::path::PathBuf {
 }
 
 impl StatsCollector {
-    pub fn record(&mut self, module: &str, original_tokens: usize, compressed_tokens: usize) {
-        let entry = self.per_module.entry(module.to_string()).or_default();
+    pub fn record(&self, module: &str, original_tokens: usize, compressed_tokens: usize) {
+        let mut guard = self.per_module.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = guard.entry(module.to_string()).or_default();
         entry.calls += 1;
         entry.original_tokens += original_tokens as u64;
         entry.compressed_tokens += compressed_tokens as u64;
     }
 
     pub fn snapshot(&self) -> HashMap<String, ModuleStats> {
-        self.per_module.clone()
+        self.per_module.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn totals(&self) -> ModuleStats {
-        self.per_module
-            .values()
-            .fold(ModuleStats::default(), |mut acc, st| {
-                acc.calls += st.calls;
-                acc.original_tokens += st.original_tokens;
-                acc.compressed_tokens += st.compressed_tokens;
-                acc
-            })
+        let guard = self.per_module.lock().unwrap_or_else(|e| e.into_inner());
+        Self::sum_modules(&guard)
+    }
+
+    /// Return modules and totals from a single consistent snapshot.
+    pub fn snapshot_and_totals(&self) -> (HashMap<String, ModuleStats>, ModuleStats) {
+        let modules = self.snapshot();
+        let totals = Self::sum_modules(&modules);
+        (modules, totals)
+    }
+
+    fn sum_modules(modules: &HashMap<String, ModuleStats>) -> ModuleStats {
+        modules.values().fold(ModuleStats::default(), |mut acc, st| {
+            acc.calls += st.calls;
+            acc.original_tokens += st.original_tokens;
+            acc.compressed_tokens += st.compressed_tokens;
+            acc
+        })
+    }
+}
+
+#[cfg(test)]
+mod shared_stats_tests {
+    use super::*;
+
+    #[test]
+    fn cloned_collector_shares_updates_and_preserves_serde_shape() {
+        let original = StatsCollector::default();
+        let another = original.clone();
+        another.record("output_compressor", 100, 25);
+        original.record("memory_manager", 50, 40);
+        let (modules, totals) = original.snapshot_and_totals();
+        assert_eq!(totals.calls, 2);
+        assert_eq!(totals.original_tokens, 150);
+        assert_eq!(modules["output_compressor"].compressed_tokens, 25);
+
+        let wire = serde_json::to_value(&original).unwrap();
+        assert_eq!(wire["per_module"]["memory_manager"]["calls"], 1);
+        let decoded: StatsCollector = serde_json::from_value(wire).unwrap();
+        decoded.record("new_module", 1, 1);
+        assert_eq!(decoded.totals().calls, 3);
+        assert_eq!(original.totals().calls, 2);
     }
 }
