@@ -249,9 +249,10 @@ def navigator_and_stats_test(binary):
             for key in ("original_tokens", "compressed_tokens"):
                 assert totals[key] == sum(x[key] for x in modules.values())
 
-            # Invalid paths produce tool errors without erasing the cache.
+            # Invalid roots produce a tool error without erasing the cache.
             client.send([call(8105, "navigate_codebase",
-                              {"root": str(root / "missing-dir")})])
+                              {"root": str(root / "missing-dir"),
+                               "force_rescan": True})])
             invalid = client.collect([8105])[8105]
             assert invalid["result"]["isError"] is True, invalid
             client.send([call(8106, "navigate_codebase", {"query": "symbol_40"})])
