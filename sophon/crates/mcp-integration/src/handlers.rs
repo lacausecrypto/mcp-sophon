@@ -1164,6 +1164,40 @@ mod phase1_concurrency_tests {
     }
 
     #[test]
+    fn invalid_navigator_root_keeps_the_existing_scan() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("lib.rs"),
+            "pub fn cached_symbol() -> usize { 42 }",
+        )
+        .unwrap();
+
+        let mut server = SophonServer::new();
+        let first = server
+            .handle_tool_call(
+                "navigate_codebase",
+                json!({"root": directory.path().display().to_string()}),
+            )
+            .unwrap();
+        assert_eq!(first["scan_result"]["kind"], "fresh");
+
+        let invalid = server.handle_tool_call(
+            "navigate_codebase",
+            json!({
+                "root": directory.path().join("missing").display().to_string(),
+                "force_rescan": true
+            }),
+        );
+        assert!(invalid.is_err());
+
+        let reused = server
+            .handle_tool_call("navigate_codebase", json!({"query": "cached_symbol"}))
+            .unwrap();
+        assert_eq!(reused["scan_result"]["kind"], "incremental");
+        assert_eq!(reused["scan_result"]["unchanged"], 1);
+    }
+
+    #[test]
     fn stateless_path_matches_regular_tool_response() {
         let mut server = SophonServer::new();
         let args = json!({"command": "cargo test", "output": "test result: ok\\n"});
