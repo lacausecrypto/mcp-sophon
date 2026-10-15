@@ -1255,7 +1255,7 @@ mod phase1_concurrency_tests {
     fn delta_versions_remain_monotonic_and_read_cache_is_consistent() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("file.rs");
-        std::fs::write(&path, "pub fn original() {}\\n").unwrap();
+        std::fs::write(&path, "pub fn original() {}\n").unwrap();
         let mut server = SophonServer::new();
         let filepath = path.to_string_lossy().to_string();
         let first = server
@@ -1269,7 +1269,7 @@ mod phase1_concurrency_tests {
                     "write_file_delta",
                     json!({
                         "path": filepath,
-                        "changes": {"Full": {"content": format!("pub const VALUE: u64 = {version};\\n")}}
+                        "changes": {"Full": {"content": format!("pub const VALUE: u64 = {version};\n")}}
                     }),
                 )
                 .unwrap();
@@ -1289,8 +1289,8 @@ mod phase1_concurrency_tests {
     fn encoded_fragments_are_available_to_decoder_immediately() {
         let mut server = SophonServer::new();
         let content = format!(
-            "```rust\\n{}```",
-            "pub fn long_repeated_rust_code(value: usize) -> usize { value * 2 + 1 }\\n".repeat(80)
+            "```rust\n{}```",
+            "pub fn long_repeated_rust_code(value: usize) -> usize { value * 2 + 1 }\n".repeat(80)
         );
         let encoded = server
             .handle_tool_call("encode_fragments", json!({"content": content}))
