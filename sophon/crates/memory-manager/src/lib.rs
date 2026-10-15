@@ -303,6 +303,15 @@ impl MemoryManager {
         if messages.is_empty() {
             return Ok(());
         }
+        // The replay reader rejects implausibly large batch metadata.
+        // Refuse such writes up front rather than persisting a batch that
+        // would later be discarded on restart.
+        if messages.len() > 100_000 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "memory batch exceeds 100000 messages",
+            ));
+        }
 
         let mut bytes = Vec::new();
         if messages.len() == 1 {
@@ -625,7 +634,9 @@ mod atomic_persistence_tests {
         assert_eq!(resumed.history[0].content, "committed");
         assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 1);
 
-        resumed.try_append(vec![Message::user("after recovery")]).unwrap();
+        resumed
+            .try_append(vec![Message::user("after recovery")])
+            .unwrap();
         assert_eq!(
             MemoryManager::new(MemoryConfig::default())
                 .with_persistence(&path)
