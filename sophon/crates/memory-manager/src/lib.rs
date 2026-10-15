@@ -14,7 +14,7 @@ pub mod reconstructor;
 pub mod summarizer;
 pub mod tail_summary;
 
-use std::{fs, path::PathBuf};
+use std::{fs, io, path::PathBuf};
 
 pub use fact_cards::{extract_fact_cards, FactCards, FactEvent};
 pub use fact_extractor::extract_facts;
@@ -93,7 +93,7 @@ fn write_rolling_sidecar(
     }
     let raw = serde_json::to_string_pretty(rolling)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    fs::write(&p, raw)
+    sophon_core::atomic_file::replace(&p, raw.as_bytes())
 }
 
 fn delete_rolling_sidecar(history_path: &std::path::Path) {
@@ -159,7 +159,7 @@ impl MemoryManager {
             // Discard a sidecar that's ahead of the live history (the
             // history file was truncated externally).
             if let Some(r) = &self.rolling {
-                if r.summarized_until > self.history.len() {
+                if self.history.is_empty() || r.summarized_until > self.history.len() {
                     self.rolling = None;
                     delete_rolling_sidecar(&path);
                 }
@@ -173,21 +173,23 @@ impl MemoryManager {
         self.persistence_path.as_ref()
     }
 
-    fn flush_append(&self, msgs: &[Message]) -> std::io::Result<()> {
-        use std::io::Write;
+    /// Serialize a complete JSONL snapshot before touching the destination.
+    /// Atomic replacement provides whole-batch durability, including after an
+    /// abrupt process stop. It deliberately trades O(history size) disk IO per
+    /// persisted append for compatibility with the existing one-message-per-
+    /// line JSONL format; installations with very large histories may benefit
+    /// from a future write-ahead log.
+    fn flush_snapshot(&self, new_messages: &[Message]) -> io::Result<()> {
         let Some(path) = &self.persistence_path else {
             return Ok(());
         };
-        let mut f = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)?;
-        for m in msgs {
-            let line = serde_json::to_string(m)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-            writeln!(f, "{}", line)?;
+        let mut bytes = Vec::new();
+        for message in self.history.iter().chain(new_messages) {
+            serde_json::to_writer(&mut bytes, message)
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+            bytes.push(b'\n');
         }
-        f.flush()
+        sophon_core::atomic_file::replace(path, &bytes)
     }
 
     pub fn compress(&self, messages: &[Message]) -> CompressedMemory {
@@ -223,9 +225,12 @@ impl MemoryManager {
     /// summary cost from query time to ingest time. Subsequent
     /// `snapshot()` calls become near-instant: they just stitch the
     /// stored summary to the live recent window.
-    pub fn append(&mut self, messages: Vec<Message>) {
-        if self.persistence_path.is_some() {
-            let _ = self.flush_append(&messages);
+    /// Durable append with explicit errors. The in-memory history is updated
+    /// only after the full JSONL snapshot has atomically replaced the previous
+    /// file. No caller can observe uncommitted state after an IO failure.
+    pub fn try_append(&mut self, messages: Vec<Message>) -> io::Result<()> {
+        if !messages.is_empty() {
+            self.flush_snapshot(&messages)?;
         }
         self.history.extend(messages);
 
@@ -237,10 +242,24 @@ impl MemoryManager {
                 self.rolling_threshold,
             ) {
                 if let Some(path) = &self.persistence_path {
-                    let _ = write_rolling_sidecar(path, &new_rolling);
+                    if let Err(err) = write_rolling_sidecar(path, &new_rolling) {
+                        // The history snapshot is committed already. A
+                        // derived sidecar failure must not ask the caller to
+                        // retry the append and accidentally duplicate it.
+                        tracing::warn!(error = %err, "rolling summary sidecar could not be persisted");
+                    }
                 }
                 self.rolling = Some(new_rolling);
             }
+        }
+        Ok(())
+    }
+
+    /// Backwards-compatible convenience API. Prefer try_append() when a
+    /// caller can surface storage errors to the end user.
+    pub fn append(&mut self, messages: Vec<Message>) {
+        if let Err(err) = self.try_append(messages) {
+            tracing::error!(error = %err, "memory append failed; RAM state was not advanced");
         }
     }
 
@@ -256,12 +275,24 @@ impl MemoryManager {
     /// Clear the accumulated session history. If a persistence path is
     /// attached, the JSONL file is truncated and the rolling-summary
     /// sidecar is deleted.
-    pub fn reset(&mut self) {
+    /// Atomic reset: do not discard the in-memory session unless the empty
+    /// persistent snapshot has been committed successfully.
+    pub fn try_reset(&mut self) -> io::Result<()> {
+        if let Some(path) = &self.persistence_path {
+            sophon_core::atomic_file::replace(path, b"")?;
+        }
         self.history.clear();
         self.rolling = None;
         if let Some(path) = &self.persistence_path {
-            let _ = fs::write(path, b"");
             delete_rolling_sidecar(path);
+        }
+        Ok(())
+    }
+
+    /// Backwards-compatible convenience API. Prefer try_reset() in RPCs.
+    pub fn reset(&mut self) {
+        if let Err(err) = self.try_reset() {
+            tracing::error!(error = %err, "memory reset failed; previous history retained");
         }
     }
 
