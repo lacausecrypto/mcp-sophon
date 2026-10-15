@@ -36,6 +36,8 @@ pub enum RetrieverError {
     Embedder(#[from] EmbedderError),
     #[error("index error: {0}")]
     Index(String),
+    #[error("tool call cancelled")]
+    Cancelled,
 }
 
 #[derive(Debug, Clone)]
@@ -269,21 +271,58 @@ impl Retriever {
         &mut self,
         messages: &[ChunkInputMessage<'_>],
     ) -> Result<usize, RetrieverError> {
+        self.index_messages_with_cancel(messages, || false)
+    }
+
+    /// Cancellation-safe batch preparation. Failures or cancellation during
+    /// chunking/embedding leave disk and all in-memory indices unchanged.
+    /// The durable commit starts only once every embedding has succeeded;
+    /// no cooperative cancellation is checked halfway through an append.
+    pub fn index_messages_with_cancel(
+        &mut self,
+        messages: &[ChunkInputMessage<'_>],
+        cancelled: impl Fn() -> bool,
+    ) -> Result<usize, RetrieverError> {
+        if cancelled() {
+            return Err(RetrieverError::Cancelled);
+        }
         let chunks = chunk_messages(messages, &self.config.chunk_config);
-        let mut added = 0;
+        let mut prepared = Vec::new();
         for mut chunk in chunks {
+            if cancelled() {
+                return Err(RetrieverError::Cancelled);
+            }
             if self.store.contains(&chunk.id) {
                 continue;
             }
-            let v = self.embedder.embed(&chunk.content)?;
-            chunk.embedding = Some(v.clone());
-            self.index
-                .upsert(&chunk.id, &v)
-                .map_err(|e| RetrieverError::Index(e.to_string()))?;
-            self.bm25.insert(&chunk.id, &chunk.content);
-            self.entity_graph.insert_chunk(&chunk.id, &chunk.content);
-            self.store.insert(chunk)?;
-            added += 1;
+            let embedding = self.embedder.embed(&chunk.content)?;
+            // Validate before touching the persistent store so an invalid
+            // embedder cannot create a chunk that isn't searchable.
+            if embedding.len() != self.index.dim() {
+                return Err(RetrieverError::Index(
+                    "embedding dimension mismatch".to_string(),
+                ));
+            }
+            chunk.embedding = Some(embedding.clone());
+            prepared.push((chunk, embedding));
+        }
+        if cancelled() {
+            return Err(RetrieverError::Cancelled);
+        }
+
+        // The commit phase is intentionally non-cancellable. Store each
+        // durable entry before updating its three in-memory indices, so an
+        // IO error never leaves an in-memory-only chunk visible to queries.
+        let mut added = 0;
+        for (chunk, embedding) in prepared {
+            if self.store.insert(chunk.clone())? {
+                self.index
+                    .upsert(&chunk.id, &embedding)
+                    .map_err(|e| RetrieverError::Index(e.to_string()))?;
+                self.bm25.insert(&chunk.id, &chunk.content);
+                self.entity_graph.insert_chunk(&chunk.id, &chunk.content);
+                added += 1;
+            }
         }
         Ok(added)
     }
