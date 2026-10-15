@@ -33,3 +33,6 @@ sophon-core = { path = "../sophon-core" }
 [features]
 default = []
 bge = ["semantic-retriever/bge"]
+
+[dev-dependencies]
+tempfile = "3"

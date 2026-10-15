@@ -4,21 +4,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::message::Message;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SemanticIndex {
     pub embeddings: Vec<EmbeddedChunk>,
     pub keyword_index: HashMap<String, Vec<String>>,
     pub topic_clusters: Vec<TopicCluster>,
-}
-
-impl Default for SemanticIndex {
-    fn default() -> Self {
-        Self {
-            embeddings: Vec::new(),
-            keyword_index: HashMap::new(),
-            topic_clusters: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

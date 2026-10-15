@@ -45,9 +45,12 @@ import argparse
 import csv
 import json
 import os
+import queue
 import statistics
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -119,17 +122,45 @@ def _compress_history(rid: int, msgs: list[dict]) -> dict:
     }
 
 
-def _send_and_read(proc: subprocess.Popen, msg: dict) -> tuple[dict, float]:
+def _collect_responses(stream, responses: queue.Queue[str]) -> None:
+    """Read stdout independently so each MCP request can have a timeout."""
+    for line in stream:
+        responses.put(line)
+
+
+def _send_and_read(
+    proc: subprocess.Popen,
+    msg: dict,
+    responses: queue.Queue[str],
+    timeout_seconds: float = 30.0,
+) -> tuple[dict, float]:
     assert proc.stdin and proc.stdout
+    request_id = msg.get("id")
+    tool = msg.get("params", {}).get("name", msg.get("method"))
+    if proc.poll() is not None:
+        raise RuntimeError(f"Sophon exited with {proc.returncode} before {tool} (id={request_id})")
     t0 = time.perf_counter()
     proc.stdin.write(json.dumps(msg) + "\n")
     proc.stdin.flush()
-    line = proc.stdout.readline()
+    try:
+        line = responses.get(timeout=timeout_seconds)
+    except queue.Empty as exc:
+        raise TimeoutError(
+            f"no MCP response for {tool} (id={request_id}) within "
+            f"{timeout_seconds:g}s; process status={proc.poll()}"
+        ) from exc
     dt_ms = (time.perf_counter() - t0) * 1000.0
     try:
         resp = json.loads(line)
-    except json.JSONDecodeError:
-        resp = {}
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"invalid MCP JSON for {tool} (id={request_id}): {line[:200]!r}") from exc
+    if resp.get("id") != request_id:
+        raise RuntimeError(
+            f"MCP response ID mismatch for {tool}: expected {request_id!r}, "
+            f"received {resp.get('id')!r}"
+        )
+    if "error" in resp:
+        raise RuntimeError(f"MCP error from {tool} (id={request_id}): {resp['error']!r}")
     return resp, dt_ms
 
 
@@ -158,17 +189,23 @@ def run_curve(max_turns: int, checkpoint_every: int) -> list[Checkpoint]:
         print(f"sophon binary not found at {SOPHON!r}. Set SOPHON_BIN.", file=sys.stderr)
         sys.exit(2)
 
+    stderr_log = tempfile.TemporaryFile(mode="w+t")
     proc = subprocess.Popen(
         [SOPHON, "serve"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=stderr_log,
         text=True,
     )
     assert proc.stdin and proc.stdout
+    responses: queue.Queue[str] = queue.Queue()
+    reader = threading.Thread(
+        target=_collect_responses, args=(proc.stdout, responses), daemon=True
+    )
+    reader.start()
     try:
         # initialise
-        _send_and_read(proc, _init_msg(0))
+        _send_and_read(proc, _init_msg(0), responses)
 
         checkpoints: list[Checkpoint] = []
         all_msgs: list[dict] = []
@@ -178,12 +215,12 @@ def run_curve(max_turns: int, checkpoint_every: int) -> list[Checkpoint]:
             all_msgs.extend(new_msgs)
 
             # update_memory latency is measured every turn (cheap).
-            _, update_ms = _send_and_read(proc, _update_memory(rid, new_msgs))
+            _, update_ms = _send_and_read(proc, _update_memory(rid, new_msgs), responses)
             rid += 1
 
             if turn % checkpoint_every == 0 or turn == max_turns or turn == 1:
                 resp, compress_ms = _send_and_read(
-                    proc, _compress_history(rid, all_msgs)
+                    proc, _compress_history(rid, all_msgs), responses
                 )
                 rid += 1
                 body = resp.get("result", {}).get("structuredContent", {}) or {}
@@ -209,6 +246,13 @@ def run_curve(max_turns: int, checkpoint_every: int) -> list[Checkpoint]:
                     file=sys.stderr,
                 )
         return checkpoints
+    except (RuntimeError, TimeoutError, BrokenPipeError) as exc:
+        print(f"Scaling benchmark interrupted at turn {turn if 'turn' in locals() else 0}: {exc}", file=sys.stderr)
+        stderr_log.seek(0)
+        details = stderr_log.read()[-3000:]
+        if details:
+            print(f"Sophon stderr (last 3000 chars): {details}", file=sys.stderr)
+        raise
     finally:
         proc.stdin.close()
         try:
@@ -216,6 +260,7 @@ def run_curve(max_turns: int, checkpoint_every: int) -> list[Checkpoint]:
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
+        stderr_log.close()
 
 
 def main() -> int:

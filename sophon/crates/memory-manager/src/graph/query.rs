@@ -57,10 +57,8 @@ pub fn resolve_query_entities(store: &GraphStore, raw_entities: &[String]) -> Ve
         for e in store.iter_entities() {
             let canonical_match = e.id.as_str().contains(needle) || needle.contains(e.id.as_str());
             let alias_match = e.aliases.iter().any(|a| EntityId::from_name(a) == target);
-            if canonical_match || alias_match {
-                if seen.insert(e.id.clone()) {
-                    out.push(e.id.clone());
-                }
+            if (canonical_match || alias_match) && seen.insert(e.id.clone()) {
+                out.push(e.id.clone());
             }
         }
     }

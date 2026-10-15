@@ -64,7 +64,7 @@ pub fn react_decide(query: &str, chunk_texts: &[&str]) -> ReactDecision {
 
     let parsed: Result<DecisionOutput, _> = serde_json::from_str(&body);
     match parsed {
-        Ok(d) => d.to_decision(),
+        Ok(d) => d.into_decision(),
         Err(_) => ReactDecision::Unknown,
     }
 }
@@ -78,7 +78,7 @@ struct DecisionOutput {
 }
 
 impl DecisionOutput {
-    fn to_decision(self) -> ReactDecision {
+    fn into_decision(self) -> ReactDecision {
         if self.has_answer {
             return ReactDecision::HasAnswer;
         }
@@ -158,7 +158,7 @@ mod tests {
         let body = extract_json_object(json).unwrap_or_default();
         let parsed: Result<DecisionOutput, _> = serde_json::from_str(&body);
         parsed
-            .map(|d| d.to_decision())
+            .map(|d| d.into_decision())
             .unwrap_or(ReactDecision::Unknown)
     }
 

@@ -238,7 +238,7 @@ fn extract_dependencies(content: &str) -> Vec<String> {
                 .map(|m| {
                     m.as_str()
                         .split(',')
-                        .map(|s| normalize_section_name(s))
+                        .map(normalize_section_name)
                         .filter(|s| !s.is_empty())
                         .collect::<Vec<_>>()
                 })

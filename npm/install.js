@@ -14,10 +14,10 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const https = require('https');
-const zlib = require('zlib');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
+const os = require('os');
 
-const REPO = process.env.SOPHON_REPO || 'lacausecrypto/mcp-sophon';
+const REPO = 'lacausecrypto/mcp-sophon';
 const pkg = require('./package.json');
 const VERSION = `v${pkg.version}`;
 
@@ -41,27 +41,88 @@ function fail(msg) {
   process.exit(1);
 }
 
-function get(url, redirects = 5) {
+// GitHub Releases download URLs may redirect to GitHub's asset CDN.
+// Reject untrusted destinations before making a network request.
+function safeReleaseUrl(url, relativeTo) {
+  const parsed = new URL(url, relativeTo);
+  const host = parsed.hostname.toLowerCase();
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password ||
+      parsed.port || (host !== 'github.com' && !host.endsWith('.githubusercontent.com'))) {
+    throw new Error(`untrusted release download URL: ${parsed.origin}`);
+  }
+  return parsed.href;
+}
+
+function get(url, redirects = 5, maxBytes = 128 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
-    const req = https.get(url, { headers: { 'User-Agent': `sophon-npm/${pkg.version}` } }, (res) => {
+    let target;
+    try {
+      target = safeReleaseUrl(url);
+    } catch (e) {
+      return reject(e);
+    }
+    const req = https.get(target, { headers: { 'User-Agent': `sophon-npm/${pkg.version}` } }, (res) => {
       if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && redirects > 0) {
         res.resume();
-        return get(res.headers.location, redirects - 1).then(resolve, reject);
+        let redirect;
+        try {
+          redirect = safeReleaseUrl(res.headers.location, target);
+        } catch (e) {
+          return reject(e);
+        }
+        return get(redirect, redirects - 1, maxBytes).then(resolve, reject);
       }
       if (res.statusCode !== 200) {
-        return reject(new Error(`HTTP ${res.statusCode} on ${url}`));
+        res.resume();
+        return reject(new Error(`HTTP ${res.statusCode} on ${target}`));
       }
       const chunks = [];
-      res.on('data', (c) => chunks.push(c));
+      let size = 0;
+      res.on('data', (c) => {
+        size += c.length;
+        if (size > maxBytes) {
+          res.destroy(new Error(`release download exceeds ${maxBytes} bytes`));
+          return;
+        }
+        chunks.push(c);
+      });
       res.on('end', () => resolve(Buffer.concat(chunks)));
       res.on('error', reject);
+      res.on('aborted', () => reject(new Error('release download interrupted')));
     });
+    req.setTimeout(30000, () => req.destroy(new Error('release download timed out')));
     req.on('error', reject);
   });
 }
 
 function sha256(buf) {
   return crypto.createHash('sha256').update(buf).digest('hex');
+}
+
+// Read *only* the expected binary entry to stdout. Never extract arbitrary
+// archive members into the filesystem: tarballs and ZIPs can contain traversal,
+// symlinks or hardlinks with effects beyond the temporary directory.
+function readArchiveExecutable(archivePath, archiveName, platformKey = key()) {
+  const target = archiveName.replace(/^sophon-/, '').replace(/\.(tar\.gz|zip)$/, '');
+  const executable = platformKey.startsWith('win32-') ? 'sophon.exe' : 'sophon';
+  const member = `sophon-${target}/${executable}`;
+  const tool = platformKey.startsWith('win32-') ? 'tar.exe' : 'tar';
+  // Windows ships libarchive's tar.exe, which supports both ZIP and tar files.
+  const binary = execFileSync(tool, ['-xOf', archivePath, member], {
+    maxBuffer: 64 * 1024 * 1024,
+    timeout: 30000,
+    windowsHide: true,
+  });
+  const header = binary.subarray(0, 4);
+  const valid = platformKey.startsWith('linux-')
+    ? header.equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])) // ELF
+    : platformKey.startsWith('darwin-')
+      ? ['cffaedfe', 'feedfacf', 'cafebabe', 'bebafeca', 'cafebabf', 'bfbafeca'].includes(header.toString('hex')) // Mach-O
+      : binary.subarray(0, 2).toString('ascii') === 'MZ'; // PE
+  if (binary.length < 4096 || !valid) {
+    throw new Error(`archive entry ${member} is not a valid executable for ${platformKey}`);
+  }
+  return binary;
 }
 
 async function main() {
@@ -100,65 +161,39 @@ async function main() {
     fail(`failed to download ${archiveUrl}: ${e.message}`);
   }
   try {
-    const shaBuf = await get(sha256Url);
+    const shaBuf = await get(sha256Url, 5, 4096);
     expectedSha = shaBuf.toString('utf8').trim().split(/\s+/)[0].toLowerCase();
   } catch (e) {
-    console.warn(`[sophon] WARNING: no .sha256 file at ${sha256Url} — skipping verification`);
+    fail(`required SHA-256 checksum unavailable at ${sha256Url}: ${e.message}`);
   }
 
-  if (expectedSha) {
-    const actual = sha256(archive);
-    if (actual !== expectedSha) {
-      fail(`checksum mismatch: expected ${expectedSha}, got ${actual}`);
-    }
-    console.log(`[sophon] sha256 verified: ${expectedSha}`);
-  }
+  if (!/^[0-9a-f]{64}$/.test(expectedSha)) fail('invalid SHA-256 checksum format');
+  const actual = sha256(archive);
+  if (actual !== expectedSha) fail(`checksum mismatch: expected ${expectedSha}, got ${actual}`);
+  console.log(`[sophon] sha256 verified: ${expectedSha}`);
 
-  // Extract the archive. For tar.gz we prefer the system tar to avoid adding a
-  // dependency; for .zip on Windows we shell out to PowerShell's Expand-Archive.
-  const tmpDir = path.join(__dirname, '.tmp-extract');
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-  fs.mkdirSync(tmpDir, { recursive: true });
-  const archivePath = path.join(tmpDir, archiveName);
-  fs.writeFileSync(archivePath, archive);
-
+  // Stage the verified archive in an isolated temporary directory, and
+  // decode exactly its expected executable (never arbitrary archive entries).
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sophon-install-'));
   try {
-    if (archiveName.endsWith('.tar.gz')) {
-      execSync(`tar -xzf "${archivePath}" -C "${tmpDir}"`, { stdio: 'inherit' });
-    } else if (archiveName.endsWith('.zip')) {
-      // Windows ships PowerShell; Unix environments that hit this branch already have unzip.
-      if (isWindows) {
-        execSync(`powershell -NoProfile -Command "Expand-Archive -Force -Path '${archivePath}' -DestinationPath '${tmpDir}'"`, { stdio: 'inherit' });
-      } else {
-        execSync(`unzip -o "${archivePath}" -d "${tmpDir}"`, { stdio: 'inherit' });
-      }
-    } else {
-      fail(`unknown archive format: ${archiveName}`);
-    }
-  } catch (e) {
-    fail(`extraction failed: ${e.message}`);
+    const archivePath = path.join(tmpDir, archiveName);
+    fs.writeFileSync(archivePath, archive, { mode: 0o600 });
+    const binary = readArchiveExecutable(archivePath, archiveName, k);
+    const stagedBinary = path.join(tmpDir, isWindows ? 'sophon.exe' : 'sophon');
+    fs.writeFileSync(stagedBinary, binary, { mode: 0o755 });
+    if (!isWindows) fs.chmodSync(stagedBinary, 0o755);
+    // Never overwrite another process's already-present binary.
+    fs.copyFileSync(stagedBinary, finalBinary, fs.constants.COPYFILE_EXCL);
+    if (!isWindows) fs.chmodSync(finalBinary, 0o755);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
-
-  // The archive contains a folder like sophon-<target>/ with the binary inside.
-  const subdirs = fs.readdirSync(tmpDir).filter((n) => fs.statSync(path.join(tmpDir, n)).isDirectory());
-  let found = null;
-  for (const d of subdirs) {
-    const candidate = path.join(tmpDir, d, isWindows ? 'sophon.exe' : 'sophon');
-    if (fs.existsSync(candidate)) {
-      found = candidate;
-      break;
-    }
-  }
-  if (!found) {
-    fail('binary not found inside extracted archive');
-  }
-  fs.copyFileSync(found, finalBinary);
-  if (!isWindows) {
-    fs.chmodSync(finalBinary, 0o755);
-  }
-  fs.rmSync(tmpDir, { recursive: true, force: true });
 
   console.log(`[sophon] installed to ${finalBinary}`);
 }
 
-main().catch((e) => fail(e.stack || e.message));
+if (require.main === module) {
+  main().catch((e) => fail(e.stack || e.message));
+}
+
+module.exports = { safeReleaseUrl, sha256, get, readArchiveExecutable };

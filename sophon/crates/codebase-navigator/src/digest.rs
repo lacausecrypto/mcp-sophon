@@ -138,11 +138,7 @@ pub fn build_digest(
         total_tokens += header_tokens;
 
         let mut file_symbols: Vec<SymbolLine> = Vec::new();
-        let mut symbol_count = 0;
-        for sym in &rec.symbols {
-            if symbol_count >= config.max_symbols_per_file {
-                break;
-            }
+        for sym in rec.symbols.iter().take(config.max_symbols_per_file) {
             let line_text = format!(
                 "  L{:<5} {:<9} {}\n",
                 sym.line,
@@ -157,7 +153,6 @@ pub fn build_digest(
             rendered.push_str(&line_text);
             total_tokens += line_tokens;
             file_symbols.push(SymbolLine::from(sym));
-            symbol_count += 1;
         }
         rendered.push('\n');
         total_tokens += 1;

@@ -242,7 +242,20 @@ impl HookInstaller {
             fs::create_dir_all(parent)?;
         }
         let pretty = serde_json::to_string_pretty(settings)?;
-        fs::write(path, pretty)?;
+        // Stage beside the destination; a failed write leaves settings.json intact.
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+        use std::io::Write;
+        temp.write_all(pretty.as_bytes())?;
+        temp.as_file().sync_all()?;
+        if path.exists() {
+            temp.as_file()
+                .set_permissions(fs::metadata(path)?.permissions())?;
+        }
+        temp.persist(path).map_err(|e| e.error)?;
         Ok(())
     }
 

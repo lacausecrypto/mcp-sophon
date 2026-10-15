@@ -2063,6 +2063,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sophon-core",
+ "tempfile",
  "tokio",
  "tokio-util",
  "toml",

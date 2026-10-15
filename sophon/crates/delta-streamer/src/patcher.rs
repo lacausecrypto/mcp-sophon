@@ -38,7 +38,7 @@ pub fn apply_diff(base: &str, operations: &[DiffOperation]) -> Result<String, Pa
         .filter(|(_, op)| !matches!(op, DiffOperation::Keep { .. }))
         .collect::<Vec<_>>();
 
-    indexed_ops.sort_by(|(_, a), (_, b)| op_position(b).cmp(&op_position(a)));
+    indexed_ops.sort_by_key(|(_, a)| std::cmp::Reverse(op_position(a)));
 
     for (_, op) in indexed_ops {
         match op {

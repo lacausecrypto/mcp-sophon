@@ -42,7 +42,7 @@
   ],
   "scripts": {
     "postinstall": "node install.js",
-    "test": "node -c install.js && node -c bin/sophon.js"
+    "test": "node -c install.js && node -c bin/sophon.js && node --test tests/*.test.js"
   },
   "engines": {
     "node": ">=16"

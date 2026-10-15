@@ -222,6 +222,10 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"compress_p
 
 ---
 
+### Filesystem confinement (opt-in)
+
+For clients running untrusted prompts, set `SOPHON_ALLOWED_ROOT` to an existing workspace directory. `read_file_delta`, `write_file_delta`, and `navigate_codebase` reject resolved paths outside this directory. By default, trusted local integrations retain unrestricted filesystem access. This is a path-level defense, **not** a hardened OS sandbox: although known symlinks and dangling symlinks are checked, a concurrent actor who can modify directory links may swap a path between authorization and the subsequent file operation (TOCTOU). Do not expose these tools to hostile users with write access to the same filesystem; use operating-system isolation for strict security boundaries. New files require an existing parent directory when confinement is enabled.
+
 ## Configuration
 
 Run **`sophon doctor`** to see every `SOPHON_*` env var currently set with validation warnings. Full catalogue (24 flags) lives in [`runtime_flags.rs`](./sophon/crates/mcp-integration/src/runtime_flags.rs). The flags worth knowing:

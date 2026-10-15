@@ -1,0 +1,90 @@
+name: PR performance comparison
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'sophon/crates/**'
+      - 'sophon/Cargo.toml'
+      - 'sophon/Cargo.lock'
+      - 'benchmarks/**'
+      - '.github/workflows/bench-pr-compare.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-pr-compare-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    name: Same-runner main vs PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sophon
+
+      - name: Build PR binary
+        run: |
+          cargo build --release --locked --manifest-path sophon/Cargo.toml -p mcp-integration
+          cp sophon/target/release/sophon "$RUNNER_TEMP/sophon-head"
+
+      - name: Checkout exact base commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Build main binary with same toolchain
+        run: |
+          cargo build --release --locked --manifest-path sophon/Cargo.toml -p mcp-integration
+          cp sophon/target/release/sophon "$RUNNER_TEMP/sophon-base"
+
+      - name: Restore PR benchmark scripts
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Run the same workload on both binaries
+        shell: bash
+        run: |
+          mkdir -p benchmark-comparison
+          for variant in base head; do
+            export SOPHON_BIN="$RUNNER_TEMP/sophon-$variant"
+            export SOPHON_MEMORY_PATH
+            SOPHON_MEMORY_PATH="$(mktemp)"
+            python3 benchmarks/cold_start_and_footprint.py --json > "benchmark-comparison/$variant-cold.json"
+            python3 benchmarks/session_scaling_curve.py --max-turns 100 --checkpoint 25 --json > "benchmark-comparison/$variant-scaling.json"
+            rm -f "$SOPHON_MEMORY_PATH"
+          done
+
+      - name: Publish head-to-head comparison
+        shell: bash
+        run: |
+          python3 benchmarks/compare_builds.py \
+            --base-cold benchmark-comparison/base-cold.json \
+            --head-cold benchmark-comparison/head-cold.json \
+            --base-scaling benchmark-comparison/base-scaling.json \
+            --head-scaling benchmark-comparison/head-scaling.json \
+            > benchmark-comparison/summary.md
+          cat benchmark-comparison/summary.md
+          cat benchmark-comparison/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve raw measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-vs-pr-bench-${{ github.run_id }}
+          path: benchmark-comparison/
+          retention-days: 30

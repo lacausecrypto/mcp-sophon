@@ -118,6 +118,44 @@ struct StatsArgs {
     period: Option<String>,
 }
 
+/// Restrict filesystem tools to an explicitly configured workspace.
+/// The opt-in boundary preserves existing trusted local usage.
+fn authorize_path(path: &std::path::Path) -> anyhow::Result<PathBuf> {
+    let Ok(root) = std::env::var("SOPHON_ALLOWED_ROOT") else {
+        return Ok(path.to_path_buf());
+    };
+    authorize_path_with_root(path, std::path::Path::new(&root))
+}
+
+fn authorize_path_with_root(
+    path: &std::path::Path,
+    root: &std::path::Path,
+) -> anyhow::Result<PathBuf> {
+    let root = std::fs::canonicalize(root)?;
+    // Path::exists() returns false for dangling symlinks. Treating one as a
+    // new file could let a later write follow the link outside the workspace.
+    let candidate = match std::fs::symlink_metadata(path) {
+        Ok(_) => std::fs::canonicalize(path)?,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            let parent = path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| std::path::Path::new("."));
+            let parent = std::fs::canonicalize(parent)?;
+            parent.join(
+                path.file_name()
+                    .ok_or_else(|| anyhow::anyhow!("missing filename"))?,
+            )
+        }
+        Err(err) => return Err(err.into()),
+    };
+    anyhow::ensure!(
+        candidate.starts_with(&root),
+        "path outside SOPHON_ALLOWED_ROOT"
+    );
+    Ok(candidate)
+}
+
 pub fn handle_tool_call(
     server: &mut SophonServer,
     name: &str,
@@ -361,8 +399,9 @@ pub fn handle_tool_call(
         }
         "read_file_delta" => {
             let args: ReadFileDeltaArgs = serde_json::from_value(arguments)?;
+            let safe_path = authorize_path(std::path::Path::new(&args.path))?;
             let response = server.delta_streamer.read_file_delta(
-                PathBuf::from(&args.path),
+                safe_path.clone(),
                 args.known_version,
                 args.known_hash.as_deref(),
             )?;
@@ -374,7 +413,7 @@ pub fn handle_tool_call(
             let full_tokens = server
                 .delta_streamer
                 .state_store()
-                .get(&PathBuf::from(&args.path))
+                .get(&safe_path)
                 .map(|s| s.token_count);
             let (orig, compressed) = match &response {
                 FileReadResponse::Full { token_count, .. } => (*token_count, *token_count),
@@ -389,8 +428,9 @@ pub fn handle_tool_call(
         }
         "write_file_delta" => {
             let args: WriteFileDeltaArgs = serde_json::from_value(arguments)?;
+            let safe_path = authorize_path(std::path::Path::new(&args.path))?;
             let response = server.delta_streamer.write_file_delta(FileWriteRequest {
-                path: PathBuf::from(args.path),
+                path: safe_path,
                 changes: args.changes,
             })?;
             Ok(serde_json::to_value(response)?)
@@ -446,8 +486,12 @@ pub fn handle_tool_call(
 
             // Resolve the root: explicit arg > cached root.
             let root_to_scan = match args.root.as_deref() {
-                Some(p) => Some(std::path::PathBuf::from(p)),
-                None => server.codebase_navigator.root().cloned(),
+                Some(p) => Some(authorize_path(std::path::Path::new(p))?),
+                None => server
+                    .codebase_navigator
+                    .root()
+                    .map(|root| authorize_path(root.as_path()))
+                    .transpose()?,
             };
 
             // `force_rescan` clears the incremental cache so the next
@@ -819,9 +863,7 @@ fn run_retrieval(
                 // Preserve any candidates past the reranked window — they
                 // still matter for the tail-summary step below, even if
                 // they don't make the top_k.
-                for i in n..fused.len() {
-                    reranked.push(fused[i].clone());
-                }
+                reranked.extend(fused.iter().skip(n).cloned());
                 reranked
             }
             None => fused,
@@ -904,4 +946,95 @@ fn run_retrieval(
         payload["tail_summary"] = json!(summary);
     }
     Ok(Some(payload))
+}
+
+#[cfg(test)]
+mod path_security_tests {
+    use super::authorize_path_with_root;
+    use std::fs;
+
+    #[test]
+    fn rejects_existing_file_outside_allowed_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        fs::create_dir(&root).unwrap();
+        let outside = temp.path().join("secret.txt");
+        fs::write(&outside, "private").unwrap();
+        assert!(authorize_path_with_root(&outside, &root).is_err());
+    }
+
+    #[test]
+    fn accepts_existing_and_new_files_within_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        fs::create_dir(&root).unwrap();
+        // macOS resolves /var to /private/var; Windows may add a verbatim prefix.
+        // The helper deliberately returns canonical paths on all platforms.
+        let canonical_root = fs::canonicalize(&root).unwrap();
+        let existing = root.join("source.rs");
+        fs::write(&existing, "fn main() {}").unwrap();
+        assert_eq!(
+            authorize_path_with_root(&existing, &root).unwrap(),
+            canonical_root.join("source.rs")
+        );
+        let new_file = root.join("new.rs");
+        assert_eq!(
+            authorize_path_with_root(&new_file, &root).unwrap(),
+            canonical_root.join("new.rs")
+        );
+    }
+
+    #[test]
+    fn rejects_parent_traversal_for_new_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        fs::create_dir(&root).unwrap();
+        let traversal = root.join("..").join("outside.txt");
+        assert!(authorize_path_with_root(&traversal, &root).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_dangling_symlink_outside_allowed_root() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        fs::create_dir(&root).unwrap();
+        // The target does not exist yet. Path::exists() would return false
+        // for the link, but opening it for writing would follow it.
+        let future_outside = temp.path().join("future-secret.txt");
+        let link = root.join("dangling.txt");
+        symlink(&future_outside, &link).unwrap();
+        assert!(!link.exists());
+        assert!(fs::symlink_metadata(&link).is_ok());
+        assert!(authorize_path_with_root(&link, &root).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_new_file_via_symlinked_parent_outside_root() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        let outside = temp.path().join("other");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&outside).unwrap();
+        let link = root.join("linked-dir");
+        symlink(&outside, &link).unwrap();
+        assert!(authorize_path_with_root(&link.join("new.txt"), &root).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_to_outside_file() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        fs::create_dir(&root).unwrap();
+        let outside = temp.path().join("secret.txt");
+        fs::write(&outside, "private").unwrap();
+        let link = root.join("linked.txt");
+        symlink(&outside, &link).unwrap();
+        assert!(authorize_path_with_root(&link, &root).is_err());
+    }
 }
