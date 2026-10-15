@@ -412,9 +412,11 @@ impl MemoryManager {
     /// summary cost from query time to ingest time. Subsequent
     /// `snapshot()` calls become near-instant: they just stitch the
     /// stored summary to the live recent window.
-    /// Durable append with explicit errors. The in-memory history is updated
-    /// only after the full JSONL snapshot has atomically replaced the previous
-    /// file. No caller can observe uncommitted state after an IO failure.
+    /// Append complete JSONL batches with explicit errors. The in-memory
+    /// history advances only after every row is written. On a later reopen,
+    /// unfinished multi-message batches are discarded. This buffered path
+    /// survives process termination but does not guarantee OS power-loss
+    /// durability because it deliberately avoids per-append fsync.
     pub fn try_append(&mut self, messages: Vec<Message>) -> io::Result<()> {
         if !messages.is_empty() {
             self.flush_append(&messages)?;
