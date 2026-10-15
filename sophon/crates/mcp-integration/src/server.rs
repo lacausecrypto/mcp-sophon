@@ -606,9 +606,15 @@ impl SophonServer {
                 let update_call = tool_name == Some("update_memory");
                 let prompt_call = tool_name == Some("compress_prompt");
                 let session_call = history_call || update_call;
-                // History queries index/retrieve chunks; the retriever
-                // therefore owns their work with prompt semantic scoring.
-                let retrieval_call = history_call || prompt_call;
+                // A history compression without a nonempty query only uses
+                // the memory compressor. It must not queue behind retriever
+                // indexing or block semantic prompt scoring.
+                let history_retrieves = history_call
+                    && parsed
+                        .pointer("/params/arguments/query")
+                        .and_then(Value::as_str)
+                        .is_some_and(|q| !q.trim().is_empty());
+                let retrieval_call = history_retrieves || prompt_call;
                 let independent = matches!(
                     tool_name,
                     Some(
@@ -902,13 +908,25 @@ impl SophonServer {
                                         args,
                                         Some(&worker_token),
                                     )
-                                } else {
+                                } else if history_retrieves {
                                     let mut retriever = retriever_for_task
                                         .lock()
                                         .unwrap_or_else(|err| err.into_inner());
                                     crate::handlers::run_history_tool(
                                         memory,
                                         &mut retriever,
+                                        graph,
+                                        &worker_stats,
+                                        args,
+                                        Some(&worker_token),
+                                    )
+                                } else {
+                                    // No query implies no index mutation or
+                                    // semantic retrieval is possible.
+                                    let mut absent_retriever = None;
+                                    crate::handlers::run_history_tool(
+                                        memory,
+                                        &mut absent_retriever,
                                         graph,
                                         &worker_stats,
                                         args,
@@ -1105,13 +1123,27 @@ impl SophonServer {
                                     arguments,
                                     None,
                                 )
-                            } else {
+                            } else if arguments
+                                .get("query")
+                                .and_then(Value::as_str)
+                                .is_some_and(|q| !q.trim().is_empty())
+                            {
                                 let mut retriever = independent_retriever
                                     .lock()
                                     .unwrap_or_else(|err| err.into_inner());
                                 crate::handlers::run_history_tool(
                                     memory,
                                     &mut retriever,
+                                    graph,
+                                    &independent_stats,
+                                    arguments,
+                                    None,
+                                )
+                            } else {
+                                let mut absent_retriever = None;
+                                crate::handlers::run_history_tool(
+                                    memory,
+                                    &mut absent_retriever,
                                     graph,
                                     &independent_stats,
                                     arguments,
