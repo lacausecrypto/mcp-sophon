@@ -463,76 +463,20 @@ pub(crate) fn handle_tool_call_with_cancel(
             }
             Ok(value)
         }
-        "read_file_delta" => {
-            let args: ReadFileDeltaArgs = serde_json::from_value(arguments)?;
-            let safe_path = authorize_path(std::path::Path::new(&args.path))?;
-            check_cancel(cancellation)?;
-            let response = server.delta_streamer.read_file_delta(
-                safe_path.clone(),
-                args.known_version,
-                args.known_hash.as_deref(),
-            )?;
-
-            // Pull the original token count from the authoritative state store
-            // instead of re-reading the file (which races with external writes
-            // and previously swallowed IO errors via `unwrap_or`).
-            use delta_streamer::protocol::FileReadResponse;
-            let full_tokens = server
-                .delta_streamer
-                .state_store()
-                .get(&safe_path)
-                .map(|s| s.token_count);
-            let (orig, compressed) = match &response {
-                FileReadResponse::Full { token_count, .. } => (*token_count, *token_count),
-                FileReadResponse::Delta { token_count, .. } => {
-                    (full_tokens.unwrap_or(*token_count), *token_count)
-                }
-                FileReadResponse::Unchanged { .. } => (full_tokens.unwrap_or(0), 0),
-            };
-            server.stats.record("delta_streamer", orig, compressed);
-
-            Ok(serde_json::to_value(response)?)
-        }
-        "write_file_delta" => {
-            let args: WriteFileDeltaArgs = serde_json::from_value(arguments)?;
-            let safe_path = authorize_path(std::path::Path::new(&args.path))?;
-            check_cancel(cancellation)?;
-            let response = server.delta_streamer.write_file_delta(FileWriteRequest {
-                path: safe_path,
-                changes: args.changes,
-            })?;
-            Ok(serde_json::to_value(response)?)
-        }
-        "encode_fragments" => {
-            let args: EncodeFragmentsArgs = serde_json::from_value(arguments)?;
-            if let Some(auto) = args.auto_detect {
-                server.fragment_cache.config.auto_detect = auto;
-            }
-
-            check_cancel(cancellation)?;
-            let encoded = server.fragment_cache.encode(&args.content);
-            server.stats.record(
-                "fragment_cache",
-                count_tokens(&args.content),
-                count_tokens(&encoded.content),
-            );
-
-            Ok(json!({
-                "content": encoded.content,
-                "used_fragments": encoded.used_fragments,
-                "new_fragments": encoded.new_fragments,
-                "token_count": encoded.token_count,
-                "tokens_saved": encoded.tokens_saved,
-            }))
-        }
-        "decode_fragments" => {
-            let args: DecodeFragmentsArgs = serde_json::from_value(arguments)?;
-            let decoded = server
-                .fragment_cache
-                .decode(&args.content)
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-            Ok(json!({ "content": decoded }))
-        }
+        "read_file_delta" | "write_file_delta" => run_delta_tool(
+            &mut server.delta_streamer,
+            &server.stats,
+            name,
+            arguments,
+            cancellation,
+        ),
+        "encode_fragments" | "decode_fragments" => run_fragment_tool(
+            &mut server.fragment_cache,
+            &server.stats,
+            name,
+            arguments,
+            cancellation,
+        ),
         "count_tokens" => {
             let args: CountTokensArgs = serde_json::from_value(arguments)?;
             let n = count_tokens(&args.text);
@@ -560,6 +504,101 @@ pub(crate) fn handle_tool_call_with_cancel(
         }
         "get_token_stats" => get_token_stats_value(&server.stats, arguments),
         _ => Err(anyhow::anyhow!("unknown tool: {}", name)),
+    }
+}
+
+/// One delta-streamer transaction: the file state store and the filesystem
+/// operation stay under the same module mutex. Cancellation is checked before
+/// entry, never in the middle of a persistent write or store update.
+pub(crate) fn run_delta_tool(
+    delta: &mut delta_streamer::DeltaStreamer,
+    stats: &StatsCollector,
+    name: &str,
+    arguments: Value,
+    cancellation: Option<&CancellationToken>,
+) -> anyhow::Result<Value> {
+    check_cancel(cancellation)?;
+    match name {
+        "read_file_delta" => {
+            let args: ReadFileDeltaArgs = serde_json::from_value(arguments)?;
+            let safe_path = authorize_path(std::path::Path::new(&args.path))?;
+            check_cancel(cancellation)?;
+            let response = delta.read_file_delta(
+                safe_path.clone(),
+                args.known_version,
+                args.known_hash.as_deref(),
+            )?;
+
+            // Read authoritative version/token count while holding the
+            // same module lock as the file read and cache update.
+            use delta_streamer::protocol::FileReadResponse;
+            let full_tokens = delta.state_store().get(&safe_path).map(|s| s.token_count);
+            let (original, compressed) = match &response {
+                FileReadResponse::Full { token_count, .. } => (*token_count, *token_count),
+                FileReadResponse::Delta { token_count, .. } => {
+                    (full_tokens.unwrap_or(*token_count), *token_count)
+                }
+                FileReadResponse::Unchanged { .. } => (full_tokens.unwrap_or(0), 0),
+            };
+            stats.record("delta_streamer", original, compressed);
+            Ok(serde_json::to_value(response)?)
+        }
+        "write_file_delta" => {
+            let args: WriteFileDeltaArgs = serde_json::from_value(arguments)?;
+            let safe_path = authorize_path(std::path::Path::new(&args.path))?;
+            check_cancel(cancellation)?;
+            let response = delta.write_file_delta(FileWriteRequest {
+                path: safe_path,
+                changes: args.changes,
+            })?;
+            Ok(serde_json::to_value(response)?)
+        }
+        _ => Err(anyhow::anyhow!("unknown delta tool: {}", name)),
+    }
+}
+
+/// Fragment encoding inserts references into a mutable store. Hold its
+/// dedicated lock throughout encoding and store commit so any subsequent
+/// decode observes every fragment returned by an earlier encoder response.
+pub(crate) fn run_fragment_tool(
+    fragments: &mut fragment_cache::FragmentCache,
+    stats: &StatsCollector,
+    name: &str,
+    arguments: Value,
+    cancellation: Option<&CancellationToken>,
+) -> anyhow::Result<Value> {
+    check_cancel(cancellation)?;
+    match name {
+        "encode_fragments" => {
+            let args: EncodeFragmentsArgs = serde_json::from_value(arguments)?;
+            check_cancel(cancellation)?;
+            if let Some(auto_detect) = args.auto_detect {
+                fragments.config.auto_detect = auto_detect;
+            }
+
+            let encoded = fragments.encode(&args.content);
+            stats.record(
+                "fragment_cache",
+                count_tokens(&args.content),
+                count_tokens(&encoded.content),
+            );
+            Ok(json!({
+                "content": encoded.content,
+                "used_fragments": encoded.used_fragments,
+                "new_fragments": encoded.new_fragments,
+                "token_count": encoded.token_count,
+                "tokens_saved": encoded.tokens_saved,
+            }))
+        }
+        "decode_fragments" => {
+            let args: DecodeFragmentsArgs = serde_json::from_value(arguments)?;
+            check_cancel(cancellation)?;
+            let decoded = fragments
+                .decode(&args.content)
+                .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+            Ok(json!({ "content": decoded }))
+        }
+        _ => Err(anyhow::anyhow!("unknown fragment tool: {}", name)),
     }
 }
 
