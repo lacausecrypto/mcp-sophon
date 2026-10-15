@@ -276,7 +276,7 @@ def delta_fragment_integrity_test(binary):
     """The two dedicated module caches remain coherent under concurrent calls."""
     with tempfile.TemporaryDirectory(prefix="sophon-subsystems-") as directory:
         path = Path(directory) / "state.rs"
-        path.write_text("pub const REVISION: u64 = 1;\\n", encoding="utf-8")
+        path.write_text("pub const REVISION: u64 = 1;\n", encoding="utf-8")
         client = Client(binary, max_workers=4)
         try:
             client.send([call(9000, "read_file_delta", {"path": str(path)})])
@@ -286,7 +286,7 @@ def delta_fragment_integrity_test(binary):
             # All writes to this *single* path must be serialized: neither
             # duplicate versions nor partially replaced files are allowed.
             updates = {
-                9001 + i: f"pub const REVISION: u64 = {i + 2};\\n"
+                9001 + i: f"pub const REVISION: u64 = {i + 2};\n"
                 for i in range(16)
             }
             client.send([
@@ -315,8 +315,8 @@ def delta_fragment_integrity_test(binary):
             # Each encode must commit its newly emitted fragment IDs before
             # any response can be consumed by a decoder.
             contents = {
-                9100 + i: "```rust\\n" +
-                (f"pub fn isolated_fragment_{i}(n: usize) -> usize {{ n * 3 + {i} }}\\n" * 65) +
+                9100 + i: "```rust\n" +
+                (f"pub fn isolated_fragment_{i}(n: usize) -> usize {{ n * 3 + {i} }}\n" * 65) +
                 "```"
                 for i in range(10)
             }
@@ -391,8 +391,8 @@ def queued_mutation_cancellation_test(binary):
                     "changes": {"Full": {"content": "must-not-be-written"}}
                 }),
                 call(9501, "encode_fragments", {
-                    "content": "```rust\\n" +
-                    ("pub fn must_not_commit(n: u64) -> u64 { n + 2 }\\n" * 80) +
+                    "content": "```rust\n" +
+                    ("pub fn must_not_commit(n: u64) -> u64 { n + 2 }\n" * 80) +
                     "```"
                 }),
                 {"jsonrpc": "2.0", "method": "notifications/cancelled",
