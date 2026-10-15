@@ -1237,6 +1237,74 @@ mod phase1_concurrency_tests {
     }
 
     #[test]
+    fn cancelled_fragment_encode_keeps_configuration_and_store() {
+        let mut server = SophonServer::new();
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        let result = handle_tool_call_with_cancel(
+            &mut server,
+            "encode_fragments",
+            json!({"content": "brief", "auto_detect": false}),
+            Some(&cancelled),
+        );
+        assert!(result.is_err());
+        assert!(server.fragment_cache.config.auto_detect);
+    }
+
+    #[test]
+    fn delta_versions_remain_monotonic_and_read_cache_is_consistent() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("file.rs");
+        std::fs::write(&path, "pub fn original() {}\\n").unwrap();
+        let mut server = SophonServer::new();
+        let filepath = path.to_string_lossy().to_string();
+        let first = server
+            .handle_tool_call("read_file_delta", json!({"path": filepath}))
+            .unwrap();
+        assert_eq!(first["Full"]["version"], 1);
+
+        for version in 2..=6 {
+            let response = server
+                .handle_tool_call(
+                    "write_file_delta",
+                    json!({
+                        "path": filepath,
+                        "changes": {"Full": {"content": format!("pub const VALUE: u64 = {version};\\n")}}
+                    }),
+                )
+                .unwrap();
+            assert_eq!(response["Full"]["version"], version);
+        }
+        let unchanged = server
+            .handle_tool_call(
+                "read_file_delta",
+                json!({"path": filepath, "known_version": 6}),
+            )
+            .unwrap();
+        assert_eq!(unchanged["Unchanged"]["version"], 6);
+        assert_eq!(server.stats.snapshot()["delta_streamer"].calls, 2);
+    }
+
+    #[test]
+    fn encoded_fragments_are_available_to_decoder_immediately() {
+        let mut server = SophonServer::new();
+        let content = format!(
+            "```rust\\n{}```",
+            "pub fn long_repeated_rust_code(value: usize) -> usize { value * 2 + 1 }\\n".repeat(80)
+        );
+        let encoded = server
+            .handle_tool_call("encode_fragments", json!({"content": content}))
+            .unwrap();
+        let compressed = encoded["content"].as_str().unwrap();
+        assert!(compressed.contains("[FRAGMENT:"), "expected reference");
+        let decoded = server
+            .handle_tool_call("decode_fragments", json!({"content": compressed}))
+            .unwrap();
+        assert_eq!(decoded["content"], content);
+        assert_eq!(server.stats.snapshot()["fragment_cache"].calls, 1);
+    }
+
+    #[test]
     fn stateless_path_matches_regular_tool_response() {
         let mut server = SophonServer::new();
         let args = json!({"command": "cargo test", "output": "test result: ok\\n"});
