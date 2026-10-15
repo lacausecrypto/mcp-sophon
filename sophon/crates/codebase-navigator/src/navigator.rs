@@ -167,6 +167,11 @@ impl Navigator {
     ///   is already in RAM. Returns [`ScanResult::Incremental`].
     pub fn scan(&mut self, root: impl Into<PathBuf>) -> Result<ScanResult, NavigatorError> {
         let root = root.into();
+        let cancelled = || NavigatorError::Io(root.clone(),
+            std::io::Error::new(std::io::ErrorKind::Interrupted, "scan cancelled"));
+        if sophon_core::cancellation::is_cancelled() {
+            return Err(cancelled());
+        }
 
         let same_root = self
             .root
@@ -183,6 +188,9 @@ impl Navigator {
                 self.config.prefer_git,
             )
             .map_err(|e| NavigatorError::Io(root.clone(), e))?;
+            if sophon_core::cancellation::is_cancelled() {
+                return Err(cancelled());
+            }
             let scan_source = records
                 .first()
                 .map(|r| r.scan_source)
@@ -207,9 +215,13 @@ impl Navigator {
         )
         .map_err(|e| NavigatorError::Io(root.clone(), e))?;
 
-        // Build an index of the cached records for O(1) lookup.
-        let cached: HashMap<String, FileRecord> = std::mem::take(&mut self.records)
-            .into_iter()
+        if sophon_core::cancellation::is_cancelled() {
+            return Err(cancelled());
+        }
+        // Borrow cached records until the replacement is ready, so an
+        // interrupted incremental scan leaves the previous cache intact.
+        let old_records = std::mem::take(&mut self.records);
+        let cached: HashMap<String, &FileRecord> = old_records.iter()
             .map(|r| (r.relative_path.clone(), r))
             .collect();
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -220,6 +232,10 @@ impl Navigator {
         let mut added = 0usize;
 
         for candidate in &candidates {
+            if sophon_core::cancellation::is_cancelled() {
+                self.records = old_records;
+                return Err(cancelled());
+            }
             seen.insert(candidate.relative_path.clone());
             match cached.get(&candidate.relative_path) {
                 Some(old)
@@ -227,7 +243,7 @@ impl Navigator {
                         && old.byte_size == candidate.byte_size =>
                 {
                     // Cache hit — reuse as-is.
-                    next_records.push(old.clone());
+                    next_records.push((**old).clone());
                     unchanged += 1;
                 }
                 Some(_) => {
@@ -251,6 +267,10 @@ impl Navigator {
         // candidate list. They drop out naturally because we build
         // `next_records` from `candidates`.
         let removed = cached.keys().filter(|k| !seen.contains(*k)).count();
+        if sophon_core::cancellation::is_cancelled() {
+            self.records = old_records;
+            return Err(cancelled());
+        }
 
         let result = ScanResult::Incremental {
             unchanged,
