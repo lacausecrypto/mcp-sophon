@@ -40,7 +40,7 @@ struct Snapshot {
 ///     (for reverse traversal)
 ///   - `facts_by_predicate`: predicate → fact ids (for relation
 ///     queries like "what did anyone visit?")
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct GraphStore {
     snapshot: Snapshot,
     facts_by_subject: HashMap<EntityId, HashSet<FactId>>,
