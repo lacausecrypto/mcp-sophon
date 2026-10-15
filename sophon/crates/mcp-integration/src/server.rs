@@ -436,6 +436,8 @@ impl SophonServer {
             .filter(|&v| (1..=64).contains(&v))
             .unwrap_or(8);
         let slots = Arc::new(Semaphore::new(max_active));
+        // Reject floods rather than accumulating unbounded pending futures.
+        let max_pending = max_active.saturating_mul(32).min(1024);
         // Stateful calls share one transaction boundary. Queue them before
         // consuming a blocking-worker slot so pure tools cannot be starved
         // by mutex waiters.
@@ -464,6 +466,13 @@ impl SophonServer {
         let mut tool_tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
 
         while let Some(line) = lines.next_line().await? {
+            // Reap completed tasks during long-lived sessions, not only
+            // after stdin EOF; otherwise JoinSet grows with every request.
+            while let Some(joined) = tool_tasks.try_join_next() {
+                if let Err(err) = joined {
+                    tracing::warn!(error = %err, "tool task failed");
+                }
+            }
             let parsed: Value = match serde_json::from_str(&line) {
                 Ok(value) => value,
                 Err(err) => {
@@ -498,6 +507,19 @@ impl SophonServer {
                                 id,
                                 crate::jsonrpc::INVALID_REQUEST,
                                 "duplicate in-flight request id".to_string(),
+                            ),
+                        )
+                        .await?;
+                        continue;
+                    }
+                    if requests.len() >= max_pending {
+                        drop(requests);
+                        write_response(
+                            &out,
+                            &error_response(
+                                id,
+                                crate::jsonrpc::SOPHON_TOOL_EXECUTION_FAILED,
+                                "too many in-flight tool calls; retry later".to_string(),
                             ),
                         )
                         .await?;
