@@ -40,21 +40,56 @@ function fail(msg) {
   process.exit(1);
 }
 
-function get(url, redirects = 5) {
+// GitHub Releases download URLs may redirect to GitHub's asset CDN.
+// Reject untrusted destinations before making a network request.
+function safeReleaseUrl(url, relativeTo) {
+  const parsed = new URL(url, relativeTo);
+  const host = parsed.hostname.toLowerCase();
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password ||
+      parsed.port || (host !== 'github.com' && !host.endsWith('.githubusercontent.com'))) {
+    throw new Error(`untrusted release download URL: ${parsed.origin}`);
+  }
+  return parsed.href;
+}
+
+function get(url, redirects = 5, maxBytes = 128 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
-    const req = https.get(url, { headers: { 'User-Agent': `sophon-npm/${pkg.version}` } }, (res) => {
+    let target;
+    try {
+      target = safeReleaseUrl(url);
+    } catch (e) {
+      return reject(e);
+    }
+    const req = https.get(target, { headers: { 'User-Agent': `sophon-npm/${pkg.version}` } }, (res) => {
       if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && redirects > 0) {
         res.resume();
-        return get(res.headers.location, redirects - 1).then(resolve, reject);
+        let redirect;
+        try {
+          redirect = safeReleaseUrl(res.headers.location, target);
+        } catch (e) {
+          return reject(e);
+        }
+        return get(redirect, redirects - 1, maxBytes).then(resolve, reject);
       }
       if (res.statusCode !== 200) {
-        return reject(new Error(`HTTP ${res.statusCode} on ${url}`));
+        res.resume();
+        return reject(new Error(`HTTP ${res.statusCode} on ${target}`));
       }
       const chunks = [];
-      res.on('data', (c) => chunks.push(c));
+      let size = 0;
+      res.on('data', (c) => {
+        size += c.length;
+        if (size > maxBytes) {
+          res.destroy(new Error(`release download exceeds ${maxBytes} bytes`));
+          return;
+        }
+        chunks.push(c);
+      });
       res.on('end', () => resolve(Buffer.concat(chunks)));
       res.on('error', reject);
+      res.on('aborted', () => reject(new Error('release download interrupted')));
     });
+    req.setTimeout(30000, () => req.destroy(new Error('release download timed out')));
     req.on('error', reject);
   });
 }
@@ -99,7 +134,7 @@ async function main() {
     fail(`failed to download ${archiveUrl}: ${e.message}`);
   }
   try {
-    const shaBuf = await get(sha256Url);
+    const shaBuf = await get(sha256Url, 5, 4096);
     expectedSha = shaBuf.toString('utf8').trim().split(/\s+/)[0].toLowerCase();
   } catch (e) {
     fail(`required SHA-256 checksum unavailable at ${sha256Url}: ${e.message}`);
@@ -157,4 +192,8 @@ async function main() {
   console.log(`[sophon] installed to ${finalBinary}`);
 }
 
-main().catch((e) => fail(e.stack || e.message));
+if (require.main === module) {
+  main().catch((e) => fail(e.stack || e.message));
+}
+
+module.exports = { safeReleaseUrl, sha256, get };
