@@ -132,11 +132,17 @@ mod tests {
         let dir = fixture();
         let path = dir.join("private.json");
         replace(&path, b"private").unwrap();
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
 
         fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
         replace(&path, b"updated").unwrap();
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o640);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -150,7 +156,10 @@ mod tests {
         fs::write(&target, b"protected").unwrap();
         symlink(&target, &link).unwrap();
         assert!(replace(&link, b"overwritten").is_err());
-        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
         assert_eq!(fs::read(&target).unwrap(), b"protected");
         fs::remove_dir_all(dir).unwrap();
     }
