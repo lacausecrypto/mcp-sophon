@@ -179,12 +179,12 @@ impl MemoryManager {
     /// persisted append for compatibility with the existing one-message-per-
     /// line JSONL format; installations with very large histories may benefit
     /// from a future write-ahead log.
-    fn flush_snapshot(&self, new_messages: &[Message]) -> io::Result<()> {
+    fn flush_snapshot(&self, existing: &[Message], new_messages: &[Message]) -> io::Result<()> {
         let Some(path) = &self.persistence_path else {
             return Ok(());
         };
         let mut bytes = Vec::new();
-        for message in self.history.iter().chain(new_messages) {
+        for message in existing.iter().chain(new_messages) {
             serde_json::to_writer(&mut bytes, message)
                 .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
             bytes.push(b'\n');
@@ -230,10 +230,29 @@ impl MemoryManager {
     /// file. No caller can observe uncommitted state after an IO failure.
     pub fn try_append(&mut self, messages: Vec<Message>) -> io::Result<()> {
         if !messages.is_empty() {
-            self.flush_snapshot(&messages)?;
+            self.flush_snapshot(&self.history, &messages)?;
         }
         self.history.extend(messages);
 
+        self.refresh_rolling_after_commit();
+        Ok(())
+    }
+
+    /// Replace the entire session in a single atomic operation. Used for
+    /// update_memory(reset=true, messages=[...]) so reset + new history
+    /// cannot be split into two separately committed writes.
+    pub fn try_replace(&mut self, messages: Vec<Message>) -> io::Result<()> {
+        self.flush_snapshot(&[], &messages)?;
+        self.history = messages;
+        self.rolling = None;
+        if let Some(path) = &self.persistence_path {
+            delete_rolling_sidecar(path);
+        }
+        self.refresh_rolling_after_commit();
+        Ok(())
+    }
+
+    fn refresh_rolling_after_commit(&mut self) {
         if self.rolling_enabled {
             if let Some(new_rolling) = refresh_rolling_summary(
                 &self.history,
@@ -252,7 +271,6 @@ impl MemoryManager {
                 self.rolling = Some(new_rolling);
             }
         }
-        Ok(())
     }
 
     /// Backwards-compatible convenience API. Prefer try_append() when a
@@ -278,15 +296,7 @@ impl MemoryManager {
     /// Atomic reset: do not discard the in-memory session unless the empty
     /// persistent snapshot has been committed successfully.
     pub fn try_reset(&mut self) -> io::Result<()> {
-        if let Some(path) = &self.persistence_path {
-            sophon_core::atomic_file::replace(path, b"")?;
-        }
-        self.history.clear();
-        self.rolling = None;
-        if let Some(path) = &self.persistence_path {
-            delete_rolling_sidecar(path);
-        }
-        Ok(())
+        self.try_replace(Vec::new())
     }
 
     /// Backwards-compatible convenience API. Prefer try_reset() in RPCs.
