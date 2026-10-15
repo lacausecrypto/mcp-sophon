@@ -41,6 +41,92 @@ fn cfg_with_path(path: std::path::PathBuf) -> RetrieverConfig {
 }
 
 #[test]
+fn cancelled_index_preflight_keeps_disk_and_memory_unmodified() {
+    use std::cell::Cell;
+
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("chunks.jsonl");
+    let mut retriever = Retriever::open(cfg_with_path(path.clone())).unwrap();
+    let messages = vec![
+        msg(0, ChunkInputRole::User, "One unique statement about historic Belgium."),
+        msg(1, ChunkInputRole::User, "Another unrelated statement about quantum data."),
+        msg(2, ChunkInputRole::User, "A third separate statement about a rust compiler."),
+    ];
+    let checks = Cell::new(0usize);
+    let result = retriever.index_messages_with_cancel(&messages, || {
+        checks.set(checks.get() + 1);
+        checks.get() >= 3
+    });
+    assert!(matches!(result, Err(semantic_retriever::RetrieverError::Cancelled)));
+    assert_eq!(retriever.store_len(), 0);
+    assert_eq!(retriever.index_len(), 0);
+    assert_eq!(Retriever::open(cfg_with_path(path)).unwrap().store_len(), 0);
+}
+
+#[test]
+fn failed_embedding_in_batch_does_not_persist_a_prefix() {
+    use semantic_retriever::embedder::{Embedder, EmbedderError};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    struct FailOnSecond {
+        attempts: AtomicUsize,
+    }
+    impl Embedder for FailOnSecond {
+        fn dimension(&self) -> usize {
+            32
+        }
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, EmbedderError> {
+            if self.attempts.fetch_add(1, Ordering::SeqCst) >= 1 {
+                return Err(EmbedderError::Model("injected embedding failure".into()));
+            }
+            Ok(vec![0.0; 32])
+        }
+        fn name(&self) -> &'static str {
+            "fail-on-second"
+        }
+    }
+
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("chunks.jsonl");
+    let mut retriever = Retriever::with_embedder(
+        cfg_with_path(path.clone()),
+        Arc::new(FailOnSecond {
+            attempts: AtomicUsize::new(0),
+        }),
+    )
+    .unwrap();
+    let messages = vec![
+        msg(0, ChunkInputRole::User, "A completely separate first statement about Paris."),
+        msg(1, ChunkInputRole::User, "A completely separate second statement about photosynthesis."),
+        msg(2, ChunkInputRole::User, "A completely separate third statement about Rust."),
+    ];
+    assert!(retriever.index_messages(&messages).is_err());
+    assert_eq!(retriever.store_len(), 0);
+    assert_eq!(retriever.index_len(), 0);
+    assert_eq!(Retriever::open(cfg_with_path(path)).unwrap().store_len(), 0);
+}
+
+#[test]
+fn failed_durable_store_write_does_not_publish_memory_index() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("chunks.jsonl");
+    let mut retriever = Retriever::open(cfg_with_path(path.clone())).unwrap();
+
+    // This path did not exist at open. Force append to fail reliably on
+    // all three CI operating systems by replacing it with a directory.
+    std::fs::create_dir(&path).unwrap();
+    let messages = vec![msg(
+        0,
+        ChunkInputRole::User,
+        "A unique persisted record whose storage must fail.",
+    )];
+    assert!(retriever.index_messages(&messages).is_err());
+    assert_eq!(retriever.index_len(), 0);
+    assert_eq!(retriever.store_len(), 0);
+}
+
+#[test]
 fn e2e_index_then_retrieve_returns_matching_chunk() {
     let dir = tempdir().unwrap();
     let cfg = cfg_with_path(dir.path().join("chunks.jsonl"));
