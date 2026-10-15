@@ -334,7 +334,12 @@ impl SophonServer {
                     .cloned()
                     .unwrap_or(Value::Object(Default::default()));
 
-                match crate::handlers::handle_tool_call_with_cancel(self, name, arguments, cancellation) {
+                match crate::handlers::handle_tool_call_with_cancel(
+                    self,
+                    name,
+                    arguments,
+                    cancellation,
+                ) {
                     Ok(result) => {
                         let result_text =
                             serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
@@ -614,8 +619,11 @@ impl SophonServer {
                     .unwrap_or(Value::Null);
                 let target_key = canonical_id_key(&target_id);
                 let cancelled = {
-                    let mut map = pending.lock().await;
-                    if let Some(token) = map.remove(&target_key) {
+                    let map = pending.lock().await;
+                    if let Some(token) = map.get(&target_key) {
+                        // Keep the id reserved until its worker exits; an
+                        // early removal would let a reused id race an older
+                        // cancelled worker's cleanup.
                         token.cancel();
                         true
                     } else {
