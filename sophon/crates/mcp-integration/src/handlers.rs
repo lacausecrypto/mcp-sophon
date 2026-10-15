@@ -169,7 +169,10 @@ pub(crate) fn independent_tool_call(
         "count_tokens" => Some((|| {
             let args: CountTokensArgs = serde_json::from_value(arguments)?;
             let n = count_tokens(&args.text);
-            Ok((json!({"token_count": n, "char_count": args.text.chars().count()}), None))
+            Ok((
+                json!({"token_count": n, "char_count": args.text.chars().count()}),
+                None,
+            ))
         })()),
         "compress_output" => Some((|| {
             let args: CompressOutputArgs = serde_json::from_value(arguments)?;
@@ -270,8 +273,13 @@ pub(crate) fn handle_tool_call_with_cancel(
             // Optional retrieval pass: index incrementally, then look up the
             // top-k chunks for the query. No-op if the retriever is off or
             // the caller didn't pass a query.
-            let retrieval_value =
-                run_retrieval(server, &messages, query.as_deref(), retrieval_top_k, cancellation)?;
+            let retrieval_value = run_retrieval(
+                server,
+                &messages,
+                query.as_deref(),
+                retrieval_top_k,
+                cancellation,
+            )?;
 
             // Path A: pure-Rust graph query. Runs when graph memory is
             // active AND a query is provided. Zero LLM calls at this
@@ -1138,25 +1146,21 @@ mod phase1_concurrency_tests {
         let expected = server
             .handle_tool_call("compress_output", args.clone())
             .unwrap();
-        let (independent, stats) = independent_tool_call(
-            "compress_output",
-            args,
-            &server.output_compressor,
-        )
-        .unwrap()
-        .unwrap();
+        let (independent, stats) =
+            independent_tool_call("compress_output", args, &server.output_compressor)
+                .unwrap()
+                .unwrap();
         assert_eq!(independent, expected);
         assert!(stats.is_some());
 
         let args = json!({"text": "Sophon parallel tokens"});
-        let expected = server.handle_tool_call("count_tokens", args.clone()).unwrap();
-        let (independent, stats) = independent_tool_call(
-            "count_tokens",
-            args,
-            &server.output_compressor,
-        )
-        .unwrap()
-        .unwrap();
+        let expected = server
+            .handle_tool_call("count_tokens", args.clone())
+            .unwrap();
+        let (independent, stats) =
+            independent_tool_call("count_tokens", args, &server.output_compressor)
+                .unwrap()
+                .unwrap();
         assert_eq!(independent, expected);
         assert!(stats.is_none());
     }
