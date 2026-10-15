@@ -184,10 +184,15 @@ def mixed_workload_test(binary):
             independent_state = [
                 call(7200, "read_file_delta", {"path": str(path)}),
                 call(7201, "encode_fragments", {"content": "lightweight encode payload"}),
+                call(7202, "compress_prompt", {
+                    "prompt": "<core_identity>Be a careful assistant.</core_identity>"
+                              "<code_formatting>Use code blocks.</code_formatting>",
+                    "query": "careful assistant",
+                }),
             ]
             client.send(stateful + pure + independent_state)
             responses = client.collect(
-                [*range(7000, 7016), *range(7100, 7104), 7200, 7201],
+                [*range(7000, 7016), *range(7100, 7104), 7200, 7201, 7202],
                 deadline_seconds=60,
             )
         for response in responses.values():
@@ -199,6 +204,9 @@ def mixed_workload_test(binary):
             f"Pure tools starved behind serialised tools: {completion_order}")
         first_delta = completion_order.index(7200)
         first_fragment = completion_order.index(7201)
+        first_prompt = completion_order.index(7202)
+        assert first_prompt < last_stateful, (
+            f"Prompt cache starved behind query-free memory: {completion_order}")
         assert first_delta < last_stateful, (
             f"Delta module starved behind memory: {completion_order}")
         assert first_fragment < last_stateful, (
@@ -206,6 +214,7 @@ def mixed_workload_test(binary):
         return {
             "queued_stateful": 16, "pure": 4, "pure_serviced_early": True,
             "delta_serviced_early": True, "fragment_serviced_early": True,
+            "prompt_serviced_early": True,
         }
     finally:
         client.close()
