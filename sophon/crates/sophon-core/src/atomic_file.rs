@@ -23,6 +23,20 @@ pub fn replace(path: &Path, contents: &[u8]) -> io::Result<()> {
     let basename = path.file_name().ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "destination has no filename")
     })?;
+    // A rename over an existing symlink would replace the link rather than
+    // updating its target. Refuse that surprising and potentially unsafe
+    // operation. Preserve previous file permissions whenever possible.
+    let previous_permissions = match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "atomic replacement does not follow destination symlinks",
+            ));
+        }
+        Ok(metadata) => Some(metadata.permissions()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+        Err(err) => return Err(err),
+    };
 
     for _ in 0..16 {
         let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
@@ -33,11 +47,16 @@ pub fn replace(path: &Path, contents: &[u8]) -> io::Result<()> {
             id
         );
         let staged = parent.join(temp_name);
-        let mut file = match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&staged)
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        // Persistent memory and graph data may be private. Never create a
+        // replacement with world-readable default permissions on Unix.
+        #[cfg(unix)]
         {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = match options.open(&staged) {
             Ok(file) => file,
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(err) => return Err(err),
@@ -45,6 +64,9 @@ pub fn replace(path: &Path, contents: &[u8]) -> io::Result<()> {
 
         let result = (|| -> io::Result<()> {
             file.write_all(contents)?;
+            if let Some(permissions) = &previous_permissions {
+                file.set_permissions(permissions.clone())?;
+            }
             file.sync_all()?;
             drop(file);
             fs::rename(&staged, path)?;
@@ -99,6 +121,37 @@ mod tests {
         replace(&path, b"new").unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"new");
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn new_files_are_private_and_replacements_preserve_prior_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = fixture();
+        let path = dir.join("private.json");
+        replace(&path, b"private").unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        replace(&path, b"updated").unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o640);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_destination_is_not_replaced() {
+        use std::os::unix::fs::symlink;
+        let dir = fixture();
+        let target = dir.join("target.json");
+        let link = dir.join("alias.json");
+        fs::write(&target, b"protected").unwrap();
+        symlink(&target, &link).unwrap();
+        assert!(replace(&link, b"overwritten").is_err());
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read(&target).unwrap(), b"protected");
         fs::remove_dir_all(dir).unwrap();
     }
 
