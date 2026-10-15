@@ -1,0 +1,35 @@
+name: Published release install E2E
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'npm/**'
+      - '.github/workflows/release-install-e2e.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: published-release-install-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live-release-install:
+    name: Published v0.7.0 install (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Verify published release asset and execute MCP handshake
+        run: node npm/tests/live-release.e2e.js
+        env:
+          SOPHON_TEST_RELEASE_VERSION: '0.7.0'
