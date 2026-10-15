@@ -8,6 +8,7 @@ and verifies shared-memory integrity, cancellation and process liveness.
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import math
 import os
@@ -21,7 +22,8 @@ from pathlib import Path
 
 class Client:
     def __init__(self, binary: Path, max_workers: int = 8,
-                 env_overrides: dict[str, str] | None = None):
+                 env_overrides: dict[str, str] | None = None,
+                 diagnostics: bool = False):
         env = os.environ.copy()
         env["SOPHON_MAX_CONCURRENT_TOOLS"] = str(max_workers)
         env["SOPHON_NO_LLM_SUMMARY"] = "1"
@@ -32,14 +34,28 @@ class Client:
             env.pop(name, None)
         if env_overrides:
             env.update(env_overrides)
+        if diagnostics:
+            env["RUST_LOG"] = "debug"
+        self.stderr_tail = collections.deque(maxlen=100)
         self.proc = subprocess.Popen(
             [str(binary.resolve()), "serve"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, env=env, bufsize=0,
+            stderr=subprocess.PIPE if diagnostics else subprocess.DEVNULL,
+            env=env, bufsize=0,
         )
+        if diagnostics:
+            self.stderr_thread = threading.Thread(
+                target=self._stderr_reader, daemon=True,
+            )
+            self.stderr_thread.start()
         self.received: queue.Queue = queue.Queue()
         self.thread = threading.Thread(target=self._reader, daemon=True)
         self.thread.start()
+
+    def _stderr_reader(self):
+        assert self.proc.stderr is not None
+        for raw in self.proc.stderr:
+            self.stderr_tail.append(raw.decode(errors="replace").strip())
 
     def _reader(self):
         assert self.proc.stdout is not None
@@ -66,7 +82,8 @@ class Client:
             if remaining <= 0:
                 raise AssertionError(
                     f"Timeout/deadlock waiting for {sorted(expected - responses.keys())}; "
-                    f"process={self.proc.poll()}"
+                    f"process={self.proc.poll()}; "
+                    f"server_stderr_tail={list(self.stderr_tail)[-25:]}"
                 )
             try:
                 result = self.received.get(timeout=min(remaining, 0.5))
@@ -307,8 +324,13 @@ def delta_fragment_integrity_test(binary):
     with tempfile.TemporaryDirectory(prefix="sophon-subsystems-") as directory:
         path = Path(directory) / "state.rs"
         path.write_text("pub const REVISION: u64 = 1;\n", encoding="utf-8")
-        client = Client(binary, max_workers=4)
+        client = Client(binary, max_workers=4, diagnostics=True)
         try:
+            # Prove the new subprocess entered its stdio loop before
+            # exercising the isolated delta state.
+            client.send([{"jsonrpc": "2.0", "id": 8999,
+                          "method": "initialize", "params": {}}])
+            assert "result" in client.collect([8999])[8999]
             client.send([call(9000, "read_file_delta", {"path": str(path)})])
             first = check_ok(client.collect([9000])[9000])
             assert first["Full"]["version"] == 1, first
