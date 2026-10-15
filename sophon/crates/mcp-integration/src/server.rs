@@ -436,6 +436,10 @@ impl SophonServer {
             .filter(|&v| (1..=64).contains(&v))
             .unwrap_or(8);
         let slots = Arc::new(Semaphore::new(max_active));
+        // Stateful calls share one transaction boundary. Queue them before
+        // consuming a blocking-worker slot so pure tools cannot be starved
+        // by mutex waiters.
+        let stateful_gate = Arc::new(Semaphore::new(1));
 
         // Cancellation registry: maps an in-flight tools/call request_id
         // to its CancellationToken. notifications/cancelled looks up by
@@ -506,9 +510,37 @@ impl SophonServer {
                 let pending_for_task = Arc::clone(&pending);
                 let out_for_task = Arc::clone(&out);
                 let slots_for_task = Arc::clone(&slots);
+                let stateful_for_task = Arc::clone(&stateful_gate);
                 let output_for_task = Arc::clone(&independent_output);
+                let independent = matches!(
+                    parsed.pointer("/params/name").and_then(Value::as_str),
+                    Some("count_tokens" | "compress_output")
+                );
 
                 tool_tasks.spawn(async move {
+                    // Serialize mutable handlers *before* consuming a worker
+                    // slot. Only one stateful call can occupy the blocking
+                    // executor; independent tools can use remaining slots.
+                    let stateful_permit = if independent {
+                        None
+                    } else {
+                        let acquired = tokio::select! {
+                            biased;
+                            _ = token.cancelled() => {
+                                pending_for_task.lock().await.remove(&id_key);
+                                return;
+                            }
+                            result = stateful_for_task.acquire_owned() => result,
+                        };
+                        match acquired {
+                            Ok(permit) => Some(permit),
+                            Err(_) => {
+                                pending_for_task.lock().await.remove(&id_key);
+                                return;
+                            }
+                        }
+                    };
+
                     // Cancel queued work before acquiring a blocking worker.
                     let permit = tokio::select! {
                         biased;
@@ -558,6 +590,7 @@ impl SophonServer {
                         result = &mut work => Some(result),
                     };
                     drop(permit);
+                    drop(stateful_permit);
 
                     let (response, stats) = match completed {
                         Some(Ok(Ok(value))) => value,
