@@ -163,8 +163,11 @@ def run_bench(name: str, cfg: dict) -> dict:
             timeout=600,
             env=env,
         )
-    except subprocess.TimeoutExpired:
-        return {"_error": "timeout (>600s)"}
+    except subprocess.TimeoutExpired as exc:
+        stderr = exc.stderr or ""
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        return {"_error": "timeout (>600s)", "_stderr_tail": stderr[-1500:]}
     if result.returncode != 0:
         return {
             "_error": f"exit {result.returncode}",
@@ -217,6 +220,12 @@ def score_run(
             regressions.append(
                 f"  [{bench_name}] BENCH FAILED: {data['_error']}"
             )
+            diagnostic = str(data.get("_stderr_tail") or "").strip()
+            if diagnostic:
+                regressions.append(
+                    "    diagnostic (stderr tail): "
+                    + diagnostic[-800:].replace("\n", " | ")
+                )
             continue
         for m in cfg["metrics"]:
             current = extract(data, m.extractor)
