@@ -206,6 +206,7 @@ def run_bench(name: str, cfg: dict) -> dict:
 def score_run(
     bench_outputs: dict[str, dict],
     baseline: dict,
+    skipped_benches: set[str] | None = None,
 ) -> tuple[list[str], list[str], list[str], dict]:
     """Compare bench outputs to baseline. Return (regressions, wins,
     notes, fresh_baseline)."""
@@ -214,7 +215,11 @@ def score_run(
     notes: list[str] = []
     fresh: dict = {}
 
+    skipped_benches = skipped_benches or set()
     for bench_name, cfg in BENCHES.items():
+        if bench_name in skipped_benches:
+            notes.append(f"  [{bench_name}] skipped by --quick")
+            continue
         data = bench_outputs.get(bench_name, {})
         if "_error" in data:
             regressions.append(
@@ -289,9 +294,11 @@ def main() -> int:
 
     print("Running bench suite for baseline comparison…", file=sys.stderr)
     bench_outputs: dict[str, dict] = {}
+    skipped_benches: set[str] = set()
     for name, cfg in BENCHES.items():
         if args.quick and cfg.get("slow"):
             print(f"  → skipping {name} (--quick)", file=sys.stderr)
+            skipped_benches.add(name)
             continue
         bench_outputs[name] = run_bench(name, cfg)
 
@@ -300,7 +307,7 @@ def main() -> int:
         with open(BASELINE) as f:
             baseline = json.load(f)
 
-    regressions, wins, notes, fresh = score_run(bench_outputs, baseline)
+    regressions, wins, notes, fresh = score_run(bench_outputs, baseline, skipped_benches)
 
     if args.update_baseline:
         # Merge fresh values into existing baseline (don't drop benches
