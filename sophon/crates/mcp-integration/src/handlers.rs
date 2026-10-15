@@ -13,6 +13,7 @@ use semantic_retriever::{rrf_fuse, ScoredChunk, RRF_K};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sophon_core::tokens::count_tokens;
+use tokio_util::sync::CancellationToken;
 
 use crate::server::SophonServer;
 
@@ -156,11 +157,61 @@ fn authorize_path_with_root(
     Ok(candidate)
 }
 
+/// Pure tools may be computed without acquiring the shared mutable server
+/// lock. Their result is returned with optional compression statistics, which
+/// the transport commits after the computation has finished.
+type IndependentToolResult = anyhow::Result<(Value, Option<(usize, usize)>)>;
+
+pub(crate) fn independent_tool_call(
+    name: &str,
+    arguments: Value,
+    output_compressor: &output_compressor::OutputCompressor,
+) -> Option<IndependentToolResult> {
+    match name {
+        "count_tokens" => Some((|| {
+            let args: CountTokensArgs = serde_json::from_value(arguments)?;
+            let n = count_tokens(&args.text);
+            Ok((
+                json!({"token_count": n, "char_count": args.text.chars().count()}),
+                None,
+            ))
+        })()),
+        "compress_output" => Some((|| {
+            let args: CompressOutputArgs = serde_json::from_value(arguments)?;
+            let result = output_compressor.compress(&args.command, &args.output);
+            let stats = (result.original_tokens, result.compressed_tokens);
+            Ok((serde_json::to_value(result)?, Some(stats)))
+        })()),
+        _ => None,
+    }
+}
+
+fn check_cancel(cancellation: Option<&CancellationToken>) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !cancellation.is_some_and(CancellationToken::is_cancelled),
+        "tool call cancelled"
+    );
+    Ok(())
+}
+
 pub fn handle_tool_call(
     server: &mut SophonServer,
     name: &str,
     arguments: Value,
 ) -> anyhow::Result<Value> {
+    handle_tool_call_with_cancel(server, name, arguments, None)
+}
+
+/// Cancellation is cooperative: state mutations remain serialized and run
+/// to completion once started, while expensive multi-stage reads may stop
+/// between stages. Never interrupt a persistent state mutation halfway.
+pub(crate) fn handle_tool_call_with_cancel(
+    server: &mut SophonServer,
+    name: &str,
+    arguments: Value,
+    cancellation: Option<&CancellationToken>,
+) -> anyhow::Result<Value> {
+    check_cancel(cancellation)?;
     match name {
         "compress_prompt" => {
             let args: CompressPromptArgs = serde_json::from_value(arguments)?;
@@ -171,6 +222,7 @@ pub fn handle_tool_call(
             // keyword hit (e.g. "loop" ≈ "iteration").
             let section_scores = compute_section_scores(server, &args.prompt, &args.query);
 
+            check_cancel(cancellation)?;
             let parsed = server
                 .prompt_compressor
                 .compress_with_scores(
@@ -182,6 +234,7 @@ pub fn handle_tool_call(
                 )
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
+            check_cancel(cancellation)?;
             server.stats.record(
                 "prompt_compressor",
                 count_tokens(&args.prompt),
@@ -213,6 +266,7 @@ pub fn handle_tool_call(
                 args.recent_window,
             );
 
+            check_cancel(cancellation)?;
             let original_tokens: usize = messages.iter().map(|m| m.token_count).sum();
             server
                 .stats
@@ -221,8 +275,13 @@ pub fn handle_tool_call(
             // Optional retrieval pass: index incrementally, then look up the
             // top-k chunks for the query. No-op if the retriever is off or
             // the caller didn't pass a query.
-            let retrieval_value =
-                run_retrieval(server, &messages, query.as_deref(), retrieval_top_k)?;
+            let retrieval_value = run_retrieval(
+                server,
+                &messages,
+                query.as_deref(),
+                retrieval_top_k,
+                cancellation,
+            )?;
 
             // Path A: pure-Rust graph query. Runs when graph memory is
             // active AND a query is provided. Zero LLM calls at this
@@ -252,6 +311,7 @@ pub fn handle_tool_call(
             let fact_cards_on = std::env::var("SOPHON_FACT_CARDS")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false);
+            check_cancel(cancellation)?;
             let fact_cards_value = if fact_cards_on {
                 extract_fact_cards(&messages).and_then(|fc| {
                     if fc.is_empty() {
@@ -269,6 +329,7 @@ pub fn handle_tool_call(
                 None
             };
 
+            check_cancel(cancellation)?;
             // Strip the dense SemanticIndex (embeddings blow up the payload
             // orders of magnitude past the input). Opt-in with include_index.
             let mut value = json!({
@@ -400,6 +461,7 @@ pub fn handle_tool_call(
         "read_file_delta" => {
             let args: ReadFileDeltaArgs = serde_json::from_value(arguments)?;
             let safe_path = authorize_path(std::path::Path::new(&args.path))?;
+            check_cancel(cancellation)?;
             let response = server.delta_streamer.read_file_delta(
                 safe_path.clone(),
                 args.known_version,
@@ -429,6 +491,7 @@ pub fn handle_tool_call(
         "write_file_delta" => {
             let args: WriteFileDeltaArgs = serde_json::from_value(arguments)?;
             let safe_path = authorize_path(std::path::Path::new(&args.path))?;
+            check_cancel(cancellation)?;
             let response = server.delta_streamer.write_file_delta(FileWriteRequest {
                 path: safe_path,
                 changes: args.changes,
@@ -441,6 +504,7 @@ pub fn handle_tool_call(
                 server.fragment_cache.config.auto_detect = auto;
             }
 
+            check_cancel(cancellation)?;
             let encoded = server.fragment_cache.encode(&args.content);
             server.stats.record(
                 "fragment_cache",
@@ -509,6 +573,7 @@ pub fn handle_tool_call(
             let root = root_to_scan.ok_or_else(|| {
                 anyhow::anyhow!("navigate_codebase: no root provided and no cached scan available")
             })?;
+            check_cancel(cancellation)?;
             let scan_result = server
                 .codebase_navigator
                 .scan(&root)
@@ -518,6 +583,7 @@ pub fn handle_tool_call(
             if let Some(max) = args.max_tokens {
                 dcfg.max_tokens = max;
             }
+            check_cancel(cancellation)?;
             let digest = server
                 .codebase_navigator
                 .digest(args.query.as_deref(), &dcfg);
@@ -629,6 +695,7 @@ fn run_retrieval(
     messages: &[Message],
     query: Option<&str>,
     top_k_override: Option<usize>,
+    cancellation: Option<&CancellationToken>,
 ) -> anyhow::Result<Option<Value>> {
     let Some(query) = query else {
         return Ok(None);
@@ -659,6 +726,7 @@ fn run_retrieval(
         })
         .collect();
 
+    check_cancel(cancellation)?;
     // Index incrementally — duplicates are skipped at the store layer.
     let _ = retriever.index_messages(&inputs)?;
 
@@ -758,10 +826,12 @@ fn run_retrieval(
     // any ReAct follow-ups) so a single RRF fusion at the end produces the
     // final chunk order.
     let mut rankings: Vec<Vec<ScoredChunk>> = Vec::with_capacity(extra_queries.len() + 2);
+    check_cancel(cancellation)?;
     let primary = retriever.retrieve(query)?;
     let mut total_searched = primary.total_searched;
     rankings.push(primary.chunks);
     for q in &extra_queries {
+        check_cancel(cancellation)?;
         let r = retriever.retrieve(q)?;
         total_searched = total_searched.max(r.total_searched);
         rankings.push(r.chunks);
@@ -800,6 +870,7 @@ fn run_retrieval(
     if react_on {
         let mut round = 0usize;
         while react_followups.len() < react_max_rounds {
+            check_cancel(cancellation)?;
             let fused_so_far = rrf_fuse(&rankings, RRF_K);
             let top_texts: Vec<&str> = fused_so_far
                 .iter()
@@ -831,6 +902,7 @@ fn run_retrieval(
         }
     }
 
+    check_cancel(cancellation)?;
     let fused = rrf_fuse(&rankings, RRF_K);
 
     // LLM reranking (Rec #1, opt-in via SOPHON_LLM_RERANK=1) — one Haiku
@@ -1036,5 +1108,62 @@ mod path_security_tests {
         let link = root.join("linked.txt");
         symlink(&outside, &link).unwrap();
         assert!(authorize_path_with_root(&link, &root).is_err());
+    }
+}
+
+#[cfg(test)]
+mod phase1_concurrency_tests {
+    use super::*;
+
+    #[test]
+    fn cancellation_before_mutation_preserves_memory() {
+        let mut server = SophonServer::new();
+        server
+            .handle_tool_call(
+                "update_memory",
+                json!({
+                    "messages": [{"role": "user", "content": "original state"}],
+                    "return_snapshot": false
+                }),
+            )
+            .unwrap();
+
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        let result = handle_tool_call_with_cancel(
+            &mut server,
+            "update_memory",
+            json!({"reset": true, "return_snapshot": false}),
+            Some(&cancelled),
+        );
+
+        assert!(result.is_err());
+        assert_eq!(server.memory_manager.history_len(), 1);
+    }
+
+    #[test]
+    fn stateless_path_matches_regular_tool_response() {
+        let mut server = SophonServer::new();
+        let args = json!({"command": "cargo test", "output": "test result: ok\\n"});
+        let expected = server
+            .handle_tool_call("compress_output", args.clone())
+            .unwrap();
+        let (independent, stats) =
+            independent_tool_call("compress_output", args, &server.output_compressor)
+                .unwrap()
+                .unwrap();
+        assert_eq!(independent, expected);
+        assert!(stats.is_some());
+
+        let args = json!({"text": "Sophon parallel tokens"});
+        let expected = server
+            .handle_tool_call("count_tokens", args.clone())
+            .unwrap();
+        let (independent, stats) =
+            independent_tool_call("count_tokens", args, &server.output_compressor)
+                .unwrap()
+                .unwrap();
+        assert_eq!(independent, expected);
+        assert!(stats.is_none());
     }
 }

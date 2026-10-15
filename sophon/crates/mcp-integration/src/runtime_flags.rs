@@ -106,6 +106,13 @@ impl RuntimeFlag {
             kind: FlagKind::Path,
             description: "JSON snapshot path for the graph-memory store.",
         },
+        // -------- transport --------
+        RuntimeFlag {
+            name: "SOPHON_MAX_CONCURRENT_TOOLS",
+            scope: FlagScope::Transport,
+            kind: FlagKind::UInt { min: 1, max: 64 },
+            description: "Maximum active tools/call blocking workers (default 8). Queued calls can be cancelled before execution.",
+        },
         // -------- retrieval --------
         RuntimeFlag {
             name: "SOPHON_EMBEDDER",

@@ -78,6 +78,31 @@ jobs:
             '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"count_tokens","arguments":{"text":"hello world"}}}' \
             | ./target/release/sophon serve
 
+  mcp-concurrency:
+    name: MCP concurrency and cancellation (1/4/16)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sophon
+      - name: Build release binary
+        working-directory: sophon
+        run: cargo build --release --locked -p mcp-integration
+      - name: Check bounded concurrency, latency, cancellation and state integrity
+        run: |
+          python3 benchmarks/mcp_concurrency.py \
+            --binary sophon/target/release/sophon \
+            --output artifacts/mcp-concurrency.json
+      - name: Upload latency metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-concurrency-latencies
+          path: artifacts/mcp-concurrency.json
+          if-no-files-found: ignore
+
   npm-lint:
     name: npm wrapper lint (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

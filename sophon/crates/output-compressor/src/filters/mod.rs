@@ -15,7 +15,7 @@ pub mod test_runners;
 
 use crate::strategy::FilterConfig;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FilterRegistry {
     filters: Vec<FilterConfig>,
 }
