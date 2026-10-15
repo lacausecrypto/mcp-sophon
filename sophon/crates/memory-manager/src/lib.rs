@@ -14,7 +14,11 @@ pub mod reconstructor;
 pub mod summarizer;
 pub mod tail_summary;
 
-use std::{fs, path::PathBuf};
+use std::{
+    fs, io,
+    io::{Read, Seek, SeekFrom, Write},
+    path::PathBuf,
+};
 
 pub use fact_cards::{extract_fact_cards, FactCards, FactEvent};
 pub use fact_extractor::extract_facts;
@@ -32,6 +36,130 @@ pub use summarizer::{
     RollingSummary, DEFAULT_ROLLING_REFRESH_THRESHOLD,
 };
 pub use tail_summary::summarise_tail;
+
+/// Transaction metadata rides alongside normal Message fields so that
+/// existing JSONL readers still see one Message per line. An incomplete batch
+/// is discarded on recovery rather than exposing a valid-looking prefix.
+#[derive(serde::Deserialize)]
+struct BatchMarker {
+    id: String,
+    seq: usize,
+    count: usize,
+}
+
+struct PendingBatch {
+    id: String,
+    count: usize,
+    messages: Vec<Message>,
+}
+
+/// Replay complete legacy messages and committed append batches. Crash-torn
+/// tails are truncated to the last committed byte boundary. A valid legacy
+/// final line without a trailing newline is accepted for compatibility.
+fn load_jsonl_transactions(path: &std::path::Path) -> io::Result<Vec<Message>> {
+    let raw = fs::read(path)?;
+    let mut history = Vec::new();
+    let mut committed_end = 0usize;
+    let mut offset = 0usize;
+    let mut pending: Option<PendingBatch> = None;
+
+    for line in raw.split_inclusive(|b| *b == b'\n') {
+        let end = offset + line.len();
+        let complete_line = line.ends_with(b"\n");
+        let value: serde_json::Value = match serde_json::from_slice(line) {
+            Ok(value) => value,
+            Err(err) if pending.is_none() && complete_line => {
+                // Keep the old permissive behavior for malformed *legacy*
+                // complete rows, while still replaying subsequent good rows.
+                tracing::warn!(error = %err, "skipping invalid legacy memory JSONL row");
+                committed_end = end;
+                offset = end;
+                continue;
+            }
+            Err(_) => break,
+        };
+        let message: Message = match serde_json::from_value(value.clone()) {
+            Ok(message) => message,
+            Err(err) if pending.is_none() && complete_line => {
+                tracing::warn!(error = %err, "skipping invalid legacy memory row");
+                committed_end = end;
+                offset = end;
+                continue;
+            }
+            Err(_) => break,
+        };
+
+        if let Some(marker_value) = value.get("_sophon_txn") {
+            // Only newline-terminated records can complete an append
+            // transaction. A parseable but unfinished trailing JSON row
+            // is not a durable batch commit.
+            if !complete_line {
+                break;
+            }
+            let Ok(marker) = serde_json::from_value::<BatchMarker>(marker_value.clone()) else {
+                break;
+            };
+            // Bound corrupted metadata to avoid unbounded allocations from
+            // disk-controlled counts. No batch is allocated by count alone.
+            if marker.count == 0 || marker.count > 100_000 || marker.seq >= marker.count {
+                break;
+            }
+            if pending.is_none() {
+                if marker.seq != 0 {
+                    break;
+                }
+                pending = Some(PendingBatch {
+                    id: marker.id.clone(),
+                    count: marker.count,
+                    messages: Vec::new(),
+                });
+            }
+            let Some(batch) = pending.as_mut() else {
+                break;
+            };
+            if batch.id != marker.id
+                || batch.count != marker.count
+                || marker.seq != batch.messages.len()
+            {
+                break;
+            }
+            batch.messages.push(message);
+            if batch.messages.len() == batch.count {
+                history.extend(pending.take().expect("checked pending").messages);
+                committed_end = end;
+            }
+        } else {
+            // A legacy message cannot arrive in the middle of an unfinished
+            // transaction. Stop before the batch to avoid partial replay.
+            if pending.is_some() {
+                break;
+            }
+            history.push(message);
+            committed_end = end;
+        }
+
+        if !complete_line && pending.is_some() {
+            // An incomplete final batch is uncommitted even if its last
+            // individual row happened to be parseable.
+            break;
+        }
+        offset = end;
+    }
+
+    if committed_end < raw.len() {
+        // Truncate only the uncommitted suffix (partial JSON, orphaned
+        // batch rows), not a previously committed legacy row.
+        fs::OpenOptions::new()
+            .write(true)
+            .open(path)?
+            .set_len(committed_end as u64)?;
+        tracing::warn!(
+            discarded_bytes = raw.len() - committed_end,
+            "discarded incomplete persistent-memory transaction"
+        );
+    }
+    Ok(history)
+}
 
 /// High-level facade for conversation memory compression.
 ///
@@ -93,7 +221,7 @@ fn write_rolling_sidecar(
     }
     let raw = serde_json::to_string_pretty(rolling)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    fs::write(&p, raw)
+    sophon_core::atomic_file::replace(&p, raw.as_bytes())
 }
 
 fn delete_rolling_sidecar(history_path: &std::path::Path) {
@@ -141,16 +269,7 @@ impl MemoryManager {
             fs::create_dir_all(parent)?;
         }
         if path.exists() {
-            let raw = fs::read_to_string(&path)?;
-            for line in raw.lines() {
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
-                }
-                if let Ok(msg) = serde_json::from_str::<Message>(line) {
-                    self.history.push(msg);
-                }
-            }
+            self.history.extend(load_jsonl_transactions(&path)?);
         }
         // Load sidecar only if rolling is enabled — otherwise we'd
         // resurrect stale state when the user disables the feature.
@@ -159,7 +278,7 @@ impl MemoryManager {
             // Discard a sidecar that's ahead of the live history (the
             // history file was truncated externally).
             if let Some(r) = &self.rolling {
-                if r.summarized_until > self.history.len() {
+                if self.history.is_empty() || r.summarized_until > self.history.len() {
                     self.rolling = None;
                     delete_rolling_sidecar(&path);
                 }
@@ -173,21 +292,107 @@ impl MemoryManager {
         self.persistence_path.as_ref()
     }
 
-    fn flush_append(&self, msgs: &[Message]) -> std::io::Result<()> {
-        use std::io::Write;
+    /// Append transaction records in O(new batch size) rather than rewriting
+    /// the entire session. For multi-message updates, each row retains its
+    /// legacy Message fields plus private per-batch sequence metadata.
+    /// If a process dies mid-batch, the loader drops its incomplete suffix.
+    fn flush_append(&self, messages: &[Message]) -> io::Result<()> {
         let Some(path) = &self.persistence_path else {
             return Ok(());
         };
-        let mut f = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)?;
-        for m in msgs {
-            let line = serde_json::to_string(m)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-            writeln!(f, "{}", line)?;
+        if messages.is_empty() {
+            return Ok(());
         }
-        f.flush()
+        // The replay reader rejects implausibly large batch metadata.
+        // Refuse such writes up front rather than persisting a batch that
+        // would later be discarded on restart.
+        if messages.len() > 100_000 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "memory batch exceeds 100000 messages",
+            ));
+        }
+
+        let mut bytes = Vec::new();
+        if messages.len() == 1 {
+            serde_json::to_writer(&mut bytes, &messages[0])
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+            bytes.push(b'\n');
+        } else {
+            let batch_id = uuid::Uuid::new_v4().to_string();
+            for (seq, message) in messages.iter().enumerate() {
+                let mut record = serde_json::to_value(message)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                let Some(object) = record.as_object_mut() else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "message must be an object",
+                    ));
+                };
+                object.insert(
+                    "_sophon_txn".to_string(),
+                    serde_json::json!({"id": batch_id, "seq": seq, "count": messages.len()}),
+                );
+                serde_json::to_writer(&mut bytes, &record)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                bytes.push(b'\n');
+            }
+        }
+
+        let mut options = fs::OpenOptions::new();
+        options.create(true).read(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(path)?;
+        let old_len = file.metadata()?.len();
+        if old_len > 0 {
+            // Legacy files may end in a complete JSON message without a
+            // newline. Preserve it by inserting the missing delimiter.
+            file.seek(SeekFrom::End(-1))?;
+            let mut last = [0u8; 1];
+            file.read_exact(&mut last)?;
+            if last[0] != b'\n' {
+                bytes.insert(0, b'\n');
+            }
+        }
+
+        if let Err(error) = file.write_all(&bytes).and_then(|_| file.flush()) {
+            // Failed writes must not expose a new RAM state; attempt to
+            // restore the old file length too. On a process crash the
+            // loader independently handles a torn batch suffix.
+            if let Err(rollback) = file.set_len(old_len) {
+                return Err(io::Error::other(format!(
+                    "append failed: {error}; rollback also failed: {rollback}"
+                )));
+            }
+            return Err(error);
+        }
+        // The bytes are in the OS page cache, durable against a process
+        // crash. This fast path deliberately does not fsync per turn:
+        // power-loss durability requires a separate opt-in WAL/fsync policy.
+        Ok(())
+    }
+
+    /// Serialize a complete JSONL snapshot before touching the destination.
+    /// Atomic replacement provides whole-batch durability, including after an
+    /// abrupt process stop. It deliberately trades O(history size) disk IO per
+    /// persisted append for compatibility with the existing one-message-per-
+    /// line JSONL format; installations with very large histories may benefit
+    /// from a future write-ahead log.
+    fn flush_snapshot(&self, existing: &[Message], new_messages: &[Message]) -> io::Result<()> {
+        let Some(path) = &self.persistence_path else {
+            return Ok(());
+        };
+        let mut bytes = Vec::new();
+        for message in existing.iter().chain(new_messages) {
+            serde_json::to_writer(&mut bytes, message)
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+            bytes.push(b'\n');
+        }
+        sophon_core::atomic_file::replace(path, &bytes)
     }
 
     pub fn compress(&self, messages: &[Message]) -> CompressedMemory {
@@ -223,12 +428,36 @@ impl MemoryManager {
     /// summary cost from query time to ingest time. Subsequent
     /// `snapshot()` calls become near-instant: they just stitch the
     /// stored summary to the live recent window.
-    pub fn append(&mut self, messages: Vec<Message>) {
-        if self.persistence_path.is_some() {
-            let _ = self.flush_append(&messages);
+    /// Append complete JSONL batches with explicit errors. The in-memory
+    /// history advances only after every row is written. On a later reopen,
+    /// unfinished multi-message batches are discarded. This buffered path
+    /// survives process termination but does not guarantee OS power-loss
+    /// durability because it deliberately avoids per-append fsync.
+    pub fn try_append(&mut self, messages: Vec<Message>) -> io::Result<()> {
+        if !messages.is_empty() {
+            self.flush_append(&messages)?;
         }
         self.history.extend(messages);
 
+        self.refresh_rolling_after_commit();
+        Ok(())
+    }
+
+    /// Replace the entire session in a single atomic operation. Used for
+    /// update_memory(reset=true, messages=[...]) so reset + new history
+    /// cannot be split into two separately committed writes.
+    pub fn try_replace(&mut self, messages: Vec<Message>) -> io::Result<()> {
+        self.flush_snapshot(&[], &messages)?;
+        self.history = messages;
+        self.rolling = None;
+        if let Some(path) = &self.persistence_path {
+            delete_rolling_sidecar(path);
+        }
+        self.refresh_rolling_after_commit();
+        Ok(())
+    }
+
+    fn refresh_rolling_after_commit(&mut self) {
         if self.rolling_enabled {
             if let Some(new_rolling) = refresh_rolling_summary(
                 &self.history,
@@ -237,10 +466,23 @@ impl MemoryManager {
                 self.rolling_threshold,
             ) {
                 if let Some(path) = &self.persistence_path {
-                    let _ = write_rolling_sidecar(path, &new_rolling);
+                    if let Err(err) = write_rolling_sidecar(path, &new_rolling) {
+                        // The history snapshot is committed already. A
+                        // derived sidecar failure must not ask the caller to
+                        // retry the append and accidentally duplicate it.
+                        tracing::warn!(error = %err, "rolling summary sidecar could not be persisted");
+                    }
                 }
                 self.rolling = Some(new_rolling);
             }
+        }
+    }
+
+    /// Backwards-compatible convenience API. Prefer try_append() when a
+    /// caller can surface storage errors to the end user.
+    pub fn append(&mut self, messages: Vec<Message>) {
+        if let Err(err) = self.try_append(messages) {
+            tracing::error!(error = %err, "memory append failed; RAM state was not advanced");
         }
     }
 
@@ -256,12 +498,16 @@ impl MemoryManager {
     /// Clear the accumulated session history. If a persistence path is
     /// attached, the JSONL file is truncated and the rolling-summary
     /// sidecar is deleted.
+    /// Atomic reset: do not discard the in-memory session unless the empty
+    /// persistent snapshot has been committed successfully.
+    pub fn try_reset(&mut self) -> io::Result<()> {
+        self.try_replace(Vec::new())
+    }
+
+    /// Backwards-compatible convenience API. Prefer try_reset() in RPCs.
     pub fn reset(&mut self) {
-        self.history.clear();
-        self.rolling = None;
-        if let Some(path) = &self.persistence_path {
-            let _ = fs::write(path, b"");
-            delete_rolling_sidecar(path);
+        if let Err(err) = self.try_reset() {
+            tracing::error!(error = %err, "memory reset failed; previous history retained");
         }
     }
 
@@ -291,5 +537,147 @@ impl MemoryManager {
         original_messages: &[Message],
     ) -> Vec<Message> {
         expand_memory(compressed, query, original_messages)
+    }
+}
+
+#[cfg(test)]
+mod atomic_persistence_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn multi_message_append_roundtrips_as_legacy_jsonl() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut memory = MemoryManager::new(MemoryConfig::default())
+            .with_persistence(&path)
+            .unwrap();
+        memory
+            .try_append(vec![Message::user("first"), Message::assistant("second")])
+            .unwrap();
+        assert_eq!(memory.history_len(), 2);
+        let lines = fs::read_to_string(&path).unwrap();
+        assert_eq!(lines.lines().count(), 2);
+        assert!(lines
+            .lines()
+            .all(|line| serde_json::from_str::<Message>(line).is_ok()));
+
+        let resumed = MemoryManager::new(MemoryConfig::default())
+            .with_persistence(&path)
+            .unwrap();
+        assert_eq!(resumed.history_len(), 2);
+    }
+
+    #[test]
+    fn failed_append_does_not_publish_uncommitted_ram_state() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut memory = MemoryManager::new(MemoryConfig::default())
+            .with_persistence(&path)
+            .unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(memory
+            .try_append(vec![Message::user("must not commit")])
+            .is_err());
+        assert_eq!(memory.history_len(), 0);
+        fs::remove_dir(&path).unwrap();
+        memory.try_append(vec![Message::user("committed")]).unwrap();
+        assert_eq!(memory.history_len(), 1);
+    }
+
+    #[test]
+    fn failed_reset_preserves_both_ram_history_and_previous_disk_snapshot() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let backup = dir.path().join("saved.jsonl");
+        let mut memory = MemoryManager::new(MemoryConfig::default())
+            .with_persistence(&path)
+            .unwrap();
+        memory
+            .try_append(vec![Message::user("do not lose")])
+            .unwrap();
+        let old = fs::read(&path).unwrap();
+        fs::rename(&path, &backup).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(memory.try_reset().is_err());
+        assert_eq!(memory.history_len(), 1);
+        fs::remove_dir(&path).unwrap();
+        fs::rename(&backup, &path).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), old);
+    }
+
+    #[test]
+    fn incomplete_multi_message_batch_is_rolled_back_on_reopen() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut memory = MemoryManager::new(MemoryConfig::default())
+            .with_persistence(&path)
+            .unwrap();
+        memory.try_append(vec![Message::user("committed")]).unwrap();
+
+        // Simulate a crash after writing a valid first record of a
+        // two-message transaction but before its second record.
+        let mut first = serde_json::to_value(Message::user("uncommitted")).unwrap();
+        first.as_object_mut().unwrap().insert(
+            "_sophon_txn".to_string(),
+            serde_json::json!({"id": "aborted", "seq": 0, "count": 2}),
+        );
+        use io::Write;
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(file, "{}", first).unwrap();
+        drop(file);
+
+        let mut resumed = MemoryManager::new(MemoryConfig::default())
+            .with_persistence(&path)
+            .unwrap();
+        assert_eq!(resumed.history_len(), 1);
+        assert_eq!(resumed.history[0].content, "committed");
+        assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 1);
+
+        resumed
+            .try_append(vec![Message::user("after recovery")])
+            .unwrap();
+        assert_eq!(
+            MemoryManager::new(MemoryConfig::default())
+                .with_persistence(&path)
+                .unwrap()
+                .history_len(),
+            2
+        );
+    }
+
+    #[test]
+    fn reset_with_messages_commits_one_replacement_and_cleans_corrupt_tail() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut memory = MemoryManager::new(MemoryConfig::default())
+            .with_persistence(&path)
+            .unwrap();
+        memory.try_append(vec![Message::user("old")]).unwrap();
+        memory
+            .try_replace(vec![Message::assistant("new"), Message::user("another")])
+            .unwrap();
+        assert_eq!(memory.history_len(), 2);
+        let resumed = MemoryManager::new(MemoryConfig::default())
+            .with_persistence(&path)
+            .unwrap();
+        assert_eq!(resumed.history_len(), 2);
+        assert_eq!(resumed.history[0].content, "new");
+
+        let mut broken = fs::read(&path).unwrap();
+        broken.extend_from_slice(b"{\\\"incomplete");
+        fs::write(&path, broken).unwrap();
+        let mut recovered = MemoryManager::new(MemoryConfig::default())
+            .with_persistence(&path)
+            .unwrap();
+        assert_eq!(recovered.history_len(), 2);
+        recovered
+            .try_append(vec![Message::user("repaired")])
+            .unwrap();
+        let raw = fs::read_to_string(&path).unwrap();
+        assert_eq!(raw.lines().count(), 3);
+        assert!(raw
+            .lines()
+            .all(|line| serde_json::from_str::<Message>(line).is_ok()));
     }
 }

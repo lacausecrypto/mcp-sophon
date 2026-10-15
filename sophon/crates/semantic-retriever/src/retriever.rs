@@ -310,19 +310,19 @@ impl Retriever {
             return Err(RetrieverError::Cancelled);
         }
 
-        // The commit phase is intentionally non-cancellable. Store each
-        // durable entry before updating its three in-memory indices, so an
-        // IO error never leaves an in-memory-only chunk visible to queries.
-        let mut added = 0;
+        // Persist the complete prepared batch *before* publishing any
+        // in-memory index entries. A failure preserves the prior JSONL file,
+        // vector index, BM25 and entity graph; cancellation is not checked
+        // in this short durable commit stage.
+        let added = self
+            .store
+            .insert_batch(prepared.iter().map(|(chunk, _)| chunk.clone()).collect())?;
         for (chunk, embedding) in prepared {
-            if self.store.insert(chunk.clone())? {
-                self.index
-                    .upsert(&chunk.id, &embedding)
-                    .map_err(|e| RetrieverError::Index(e.to_string()))?;
-                self.bm25.insert(&chunk.id, &chunk.content);
-                self.entity_graph.insert_chunk(&chunk.id, &chunk.content);
-                added += 1;
-            }
+            self.index
+                .upsert(&chunk.id, &embedding)
+                .map_err(|e| RetrieverError::Index(e.to_string()))?;
+            self.bm25.insert(&chunk.id, &chunk.content);
+            self.entity_graph.insert_chunk(&chunk.id, &chunk.content);
         }
         Ok(added)
     }

@@ -628,6 +628,116 @@ def cancelled_memory_transaction_test(binary):
             client.close()
 
 
+
+def durable_io_error_test(binary):
+    """Disk write failures must not publish RAM state or partial chunk batches."""
+    with tempfile.TemporaryDirectory(prefix="sophon-durable-io-") as directory:
+        root = Path(directory)
+        memory_path = root / "memory.jsonl"
+        index_root = root / "index"
+        chunk_path = index_root / "chunks.jsonl"
+        env = {
+            "SOPHON_MEMORY_PATH": str(memory_path),
+            "SOPHON_RETRIEVER_PATH": str(index_root),
+        }
+        client = Client(binary, max_workers=4, env_overrides=env)
+        try:
+            client.send([{"jsonrpc": "2.0", "id": 10400,
+                          "method": "initialize", "params": {}}])
+            assert "result" in client.collect([10400])[10400]
+
+            # Initialization succeeded when memory path was absent. A
+            # directory at that location now forces atomic rename to fail.
+            memory_path.mkdir()
+            client.send([call(10401, "update_memory", {
+                "messages": [{"role": "user", "content": "uncommitted"}],
+                "return_snapshot": False,
+            })])
+            failed = client.collect([10401])[10401]
+            assert failed["result"]["isError"] is True, failed
+            client.send([call(10402, "update_memory", {"return_snapshot": False})])
+            assert check_ok(client.collect([10402])[10402])["history_len"] == 0
+            memory_path.rmdir()
+
+            client.send([call(10403, "update_memory", {
+                "reset": True,
+                "messages": [
+                    {"role": "user", "content": "committed A"},
+                    {"role": "assistant", "content": "committed B"},
+                ],
+                "return_snapshot": False,
+            })])
+            assert check_ok(client.collect([10403])[10403])["history_len"] == 2
+            assert len(memory_path.read_text(encoding="utf-8").splitlines()) == 2
+
+            # A failed reset must not clear either the disk snapshot or
+            # RAM state. Restore exactly the previous disk contents.
+            backup = root / "memory.old"
+            memory_path.rename(backup)
+            memory_path.mkdir()
+            client.send([call(10404, "update_memory", {
+                "reset": True, "return_snapshot": False,
+            })])
+            failed_reset = client.collect([10404])[10404]
+            assert failed_reset["result"]["isError"] is True, failed_reset
+            client.send([call(10405, "update_memory", {"return_snapshot": False})])
+            assert check_ok(client.collect([10405])[10405])["history_len"] == 2
+            memory_path.rmdir()
+            backup.rename(memory_path)
+
+            # With the retriever enabled but no chunk file yet, replace
+            # that destination with a directory to force a *batch*
+            # persistence error (not merely a one-chunk error).
+            chunk_path.mkdir()
+            messages = [
+                {"role": "user", "content":
+                 f"Unique science report {i}: Belgian orbital mechanics research."}
+                for i in range(12)
+            ]
+            request = {
+                "messages": messages,
+                "query": "Belgian orbital mechanics research",
+                "max_tokens": 512,
+            }
+            client.send([call(10406, "compress_history", request)])
+            failed_index = client.collect([10406], deadline_seconds=60)[10406]
+            assert failed_index["result"]["isError"] is True, failed_index
+            chunk_path.rmdir()
+
+            # Retry after fixing the storage path: the newly created index
+            # must include only a complete batch and survive a new process.
+            client.send([call(10407, "compress_history", request)])
+            retrieved = check_ok(client.collect([10407], deadline_seconds=60)[10407])
+            assert retrieved["retrieved_chunks"]["total_searched"] > 0
+            stored = [json.loads(line) for line in chunk_path.read_text(
+                encoding="utf-8"
+            ).splitlines()]
+            assert stored and all("chunk" in record for record in stored)
+        finally:
+            client.close()
+
+        resumed = Client(binary, max_workers=4, env_overrides=env)
+        try:
+            resumed.send([
+                call(10408, "update_memory", {"return_snapshot": False}),
+                call(10409, "compress_history", {
+                    "messages": [], "query": "Belgian orbital mechanics research",
+                }),
+            ])
+            results = resumed.collect([10408, 10409], deadline_seconds=60)
+            assert check_ok(results[10408])["history_len"] == 2
+            assert check_ok(results[10409])["retrieved_chunks"]["total_searched"] > 0
+        finally:
+            resumed.close()
+        return {
+            "memory_append_failure_preserves_ram": True,
+            "memory_reset_failure_preserves_ram": True,
+            "reset_and_append_single_commit": True,
+            "chunk_batch_failure_recovered": True,
+            "persistence_survives_restart": True,
+        }
+
+
 def cancellation_test(binary):
     client = Client(binary, max_workers=1)
     try:
@@ -673,6 +783,7 @@ def main():
     report["queued_mutation_cancellation"] = queued_mutation_cancellation_test(args.binary)
     report["session_retriever_persistence"] = session_retriever_persistence_test(args.binary)
     report["cancelled_memory_transaction"] = cancelled_memory_transaction_test(args.binary)
+    report["durable_io_errors"] = durable_io_error_test(args.binary)
     print(json.dumps(report, indent=2))
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
