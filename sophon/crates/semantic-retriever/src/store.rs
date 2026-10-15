@@ -199,6 +199,40 @@ mod tests {
     }
 
     #[test]
+    fn multi_chunk_batch_commits_atomically_and_preserves_old_snapshot_on_failure() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("chunks.jsonl");
+        let backup = dir.path().join("saved.jsonl");
+        let mut store = ChunkStore::open(&path).unwrap();
+        assert_eq!(
+            store.insert_batch(vec![
+                sample_chunk("a", "first"),
+                sample_chunk("b", "second"),
+            ]).unwrap(),
+            2
+        );
+        let committed = fs::read(&path).unwrap();
+        assert_eq!(committed.iter().filter(|&&b| b == b'\n').count(), 2);
+        assert_eq!(store.insert_batch(vec![sample_chunk("b", "second")]).unwrap(), 0);
+
+        fs::rename(&path, &backup).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(store.insert_batch(vec![
+            sample_chunk("c", "new first"),
+            sample_chunk("d", "new second"),
+        ]).is_err());
+        assert_eq!(store.len(), 2);
+        assert!(!store.contains("c"));
+        assert!(!store.contains("d"));
+        assert!(store.clear().is_err());
+        assert_eq!(store.len(), 2);
+        fs::remove_dir(&path).unwrap();
+        fs::rename(&backup, &path).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), committed);
+        assert_eq!(ChunkStore::open(&path).unwrap().len(), 2);
+    }
+
+    #[test]
     fn persistence_round_trip() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("chunks.jsonl");
