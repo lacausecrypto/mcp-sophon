@@ -15,6 +15,16 @@ use serde_json::{json, Value};
 use crate::{config::SophonConfig, handlers::handle_tool_call, tools::get_tool_definitions};
 use tokio_util::sync::CancellationToken;
 
+/// Session memory and graph facts must advance under one transaction
+/// boundary. A retriever index is kept independently: compress_history takes
+/// both locks (memory then retriever) while prompt compression takes retriever
+/// and prompt-cache locks, never in the reverse order.
+#[derive(Debug)]
+struct SessionState {
+    memory: MemoryManager,
+    graph: Option<GraphStore>,
+}
+
 #[derive(Debug)]
 pub struct SophonServer {
     pub prompt_compressor: PromptCompressor,
@@ -448,6 +458,17 @@ impl SophonServer {
             &mut self.fragment_cache,
             FragmentCache::new_memory(),
         )));
+        let independent_session = Arc::new(StdMutex::new(SessionState {
+            memory: std::mem::replace(
+                &mut self.memory_manager,
+                MemoryManager::new(memory_manager::MemoryConfig::default()),
+            ),
+            graph: self.graph_memory.take(),
+        }));
+        let independent_retriever = Arc::new(StdMutex::new(self.retriever.take()));
+        let independent_prompt = Arc::new(StdMutex::new(std::mem::take(
+            &mut self.prompt_compressor,
+        )));
         let server = Arc::new(Mutex::new(self));
         let max_active = std::env::var("SOPHON_MAX_CONCURRENT_TOOLS")
             .ok()
@@ -466,6 +487,12 @@ impl SophonServer {
         // queued writes/encodes from starving independent operations.
         let delta_gate = Arc::new(Semaphore::new(1));
         let fragment_gate = Arc::new(Semaphore::new(1));
+        // The session transaction, retriever index, and prompt cache use
+        // disjoint queues. Locks are acquired in session -> retriever ->
+        // prompt order where more than one subsystem is needed.
+        let session_gate = Arc::new(Semaphore::new(1));
+        let retriever_gate = Arc::new(Semaphore::new(1));
+        let prompt_gate = Arc::new(Semaphore::new(1));
 
         // Cancellation registry: maps an in-flight tools/call request_id
         // to its CancellationToken. notifications/cancelled looks up by
@@ -565,11 +592,24 @@ impl SophonServer {
                 let delta_for_gate = Arc::clone(&delta_gate);
                 let fragments_for_task = Arc::clone(&independent_fragments);
                 let fragments_for_gate = Arc::clone(&fragment_gate);
+                let session_for_task = Arc::clone(&independent_session);
+                let session_for_gate = Arc::clone(&session_gate);
+                let retriever_for_task = Arc::clone(&independent_retriever);
+                let retriever_for_gate = Arc::clone(&retriever_gate);
+                let prompt_for_task = Arc::clone(&independent_prompt);
+                let prompt_for_gate = Arc::clone(&prompt_gate);
                 let tool_name = parsed.pointer("/params/name").and_then(Value::as_str);
                 let navigator_call = tool_name == Some("navigate_codebase");
                 let delta_call = matches!(tool_name, Some("read_file_delta" | "write_file_delta"));
                 let fragment_call =
                     matches!(tool_name, Some("encode_fragments" | "decode_fragments"));
+                let history_call = tool_name == Some("compress_history");
+                let update_call = tool_name == Some("update_memory");
+                let prompt_call = tool_name == Some("compress_prompt");
+                let session_call = history_call || update_call;
+                // History queries index/retrieve chunks; the retriever
+                // therefore owns their work with prompt semantic scoring.
+                let retrieval_call = history_call || prompt_call;
                 let independent = matches!(
                     tool_name,
                     Some(
@@ -581,6 +621,9 @@ impl SophonServer {
                             | "write_file_delta"
                             | "encode_fragments"
                             | "decode_fragments"
+                            | "compress_history"
+                            | "update_memory"
+                            | "compress_prompt"
                     )
                 );
 
@@ -660,6 +703,64 @@ impl SophonServer {
                                 return;
                             }
                             result = fragments_for_gate.acquire_owned() => result,
+                        };
+                        match acquired {
+                            Ok(permit) => Some(permit),
+                            Err(_) => {
+                                pending_for_task.lock().await.remove(&id_key);
+                                return;
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                    let session_permit = if session_call {
+                        let acquired = tokio::select! {
+                            biased;
+                            _ = token.cancelled() => {
+                                pending_for_task.lock().await.remove(&id_key);
+                                return;
+                            }
+                            result = session_for_gate.acquire_owned() => result,
+                        };
+                        match acquired {
+                            Ok(permit) => Some(permit),
+                            Err(_) => {
+                                pending_for_task.lock().await.remove(&id_key);
+                                return;
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    let retrieval_permit = if retrieval_call {
+                        let acquired = tokio::select! {
+                            biased;
+                            _ = token.cancelled() => {
+                                pending_for_task.lock().await.remove(&id_key);
+                                return;
+                            }
+                            result = retriever_for_gate.acquire_owned() => result,
+                        };
+                        match acquired {
+                            Ok(permit) => Some(permit),
+                            Err(_) => {
+                                pending_for_task.lock().await.remove(&id_key);
+                                return;
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    let prompt_permit = if prompt_call {
+                        let acquired = tokio::select! {
+                            biased;
+                            _ = token.cancelled() => {
+                                pending_for_task.lock().await.remove(&id_key);
+                                return;
+                            }
+                            result = prompt_for_gate.acquire_owned() => result,
                         };
                         match acquired {
                             Ok(permit) => Some(permit),
@@ -768,6 +869,62 @@ impl SophonServer {
                                 None,
                             ));
                         }
+                        if session_call || prompt_call {
+                            let args = parsed
+                                .pointer("/params/arguments")
+                                .cloned()
+                                .unwrap_or_else(|| json!({}));
+                            let result = if prompt_call {
+                                // Score prompt sections with the *live*
+                                // retriever/embedder, not a dormant placeholder.
+                                let retriever = retriever_for_task
+                                    .lock()
+                                    .unwrap_or_else(|err| err.into_inner());
+                                let mut prompt = prompt_for_task
+                                    .lock()
+                                    .unwrap_or_else(|err| err.into_inner());
+                                crate::handlers::run_prompt_tool(
+                                    &mut prompt,
+                                    &retriever,
+                                    &worker_stats,
+                                    args,
+                                    Some(&worker_token),
+                                )
+                            } else {
+                                let mut session = session_for_task
+                                    .lock()
+                                    .unwrap_or_else(|err| err.into_inner());
+                                let SessionState { memory, graph } = &mut *session;
+                                if update_call {
+                                    crate::handlers::run_update_memory_tool(
+                                        memory,
+                                        graph,
+                                        &worker_stats,
+                                        args,
+                                        Some(&worker_token),
+                                    )
+                                } else {
+                                    let mut retriever = retriever_for_task
+                                        .lock()
+                                        .unwrap_or_else(|err| err.into_inner());
+                                    crate::handlers::run_history_tool(
+                                        memory,
+                                        &mut retriever,
+                                        graph,
+                                        &worker_stats,
+                                        args,
+                                        Some(&worker_token),
+                                    )
+                                }
+                            };
+                            return Ok((
+                                Some(tool_result_response(
+                                    parsed.get("id").cloned().unwrap_or(Value::Null),
+                                    result,
+                                )),
+                                None,
+                            ));
+                        }
                         if let Some((response, stats)) =
                             independent_rpc_response(&parsed, &output_for_task, &worker_stats)
                         {
@@ -790,6 +947,9 @@ impl SophonServer {
                         result = &mut work => Some(result),
                     };
                     drop(permit);
+                    drop(prompt_permit);
+                    drop(retrieval_permit);
+                    drop(session_permit);
                     drop(fragment_permit);
                     drop(delta_permit);
                     drop(navigator_permit);
@@ -917,6 +1077,48 @@ impl SophonServer {
                                 arguments,
                                 None,
                             )
+                        }
+                        "compress_prompt" => {
+                            let retriever = independent_retriever
+                                .lock()
+                                .unwrap_or_else(|err| err.into_inner());
+                            let mut prompt = independent_prompt
+                                .lock()
+                                .unwrap_or_else(|err| err.into_inner());
+                            crate::handlers::run_prompt_tool(
+                                &mut prompt,
+                                &retriever,
+                                &independent_stats,
+                                arguments,
+                                None,
+                            )
+                        }
+                        "compress_history" | "update_memory" => {
+                            let mut session = independent_session
+                                .lock()
+                                .unwrap_or_else(|err| err.into_inner());
+                            let SessionState { memory, graph } = &mut *session;
+                            if name == "update_memory" {
+                                crate::handlers::run_update_memory_tool(
+                                    memory,
+                                    graph,
+                                    &independent_stats,
+                                    arguments,
+                                    None,
+                                )
+                            } else {
+                                let mut retriever = independent_retriever
+                                    .lock()
+                                    .unwrap_or_else(|err| err.into_inner());
+                                crate::handlers::run_history_tool(
+                                    memory,
+                                    &mut retriever,
+                                    graph,
+                                    &independent_stats,
+                                    arguments,
+                                    None,
+                                )
+                            }
                         }
                         _ => {
                             let mut srv = server.lock().await;
