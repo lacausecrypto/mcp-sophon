@@ -477,8 +477,13 @@ def session_retriever_persistence_test(binary):
             "SOPHON_MEMORY_PATH": str(memory_file),
             "SOPHON_RETRIEVER_PATH": str(index_dir),
         }
-        client = Client(binary, max_workers=4, env_overrides=env)
+        client = Client(binary, max_workers=4, env_overrides=env,
+                        diagnostics=True)
         try:
+            # Distinguish startup/handshake stalls from memory transactions.
+            client.send([{"jsonrpc": "2.0", "id": 9999,
+                          "method": "initialize", "params": {}}])
+            assert "result" in client.collect([9999], deadline_seconds=20)[9999]
             # Concurrent session writes must be serialized *with the graph*
             # but independent from other modules.
             updates = [
@@ -550,8 +555,12 @@ def session_retriever_persistence_test(binary):
 
         # Resume from real disk state; querying without new input must reuse
         # the prior index and must not insert duplicate chunks.
-        resumed = Client(binary, max_workers=4, env_overrides=env)
+        resumed = Client(binary, max_workers=4, env_overrides=env,
+                         diagnostics=True)
         try:
+            resumed.send([{"jsonrpc": "2.0", "id": 10199,
+                           "method": "initialize", "params": {}}])
+            assert "result" in resumed.collect([10199], deadline_seconds=20)[10199]
             resumed.send([
                 call(10200, "update_memory", {"return_snapshot": False}),
                 call(10201, "compress_history", {
