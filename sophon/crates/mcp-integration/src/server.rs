@@ -763,7 +763,12 @@ impl SophonServer {
 
             // Legacy invocation is still supported. It is inline by design,
             // but must use the same live navigator cache as MCP tools/call.
-            if parsed.get("tool").and_then(Value::as_str) == Some("navigate_codebase") {
+            if parsed.get("tool").and_then(Value::as_str) == Some("navigate_codebase")
+                && !matches!(
+                    method,
+                    "initialize" | "notifications/initialized" | "ping" | "tools/list"
+                )
+            {
                 let arguments = parsed.get("arguments").cloned().unwrap_or(Value::Null);
                 let result = {
                     let mut navigator = independent_navigator
