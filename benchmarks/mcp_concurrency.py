@@ -13,6 +13,7 @@ import math
 import os
 import queue
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -26,7 +27,7 @@ class Client:
         # Keep test state hermetic.
         for name in ("SOPHON_MEMORY_PATH", "SOPHON_RETRIEVER_PATH",
                      "SOPHON_GRAPH_MEMORY", "SOPHON_GRAPH_MEMORY_PATH",
-                     "SOPHON_ROLLING_SUMMARY"):
+                     "SOPHON_ROLLING_SUMMARY", "SOPHON_ALLOWED_ROOT"):
             env.pop(name, None)
         self.proc = subprocess.Popen(
             [str(binary.resolve()), "serve"],
@@ -189,6 +190,86 @@ def mixed_workload_test(binary):
         client.close()
 
 
+
+def navigator_and_stats_test(binary):
+    """Concurrent navigator requests must not lose the shared cache or stats."""
+    with tempfile.TemporaryDirectory(prefix="sophon-nav-ci-") as directory:
+        root = Path(directory)
+        for i in range(100):
+            (root / f"module_{i:03d}.rs").write_text(
+                f"pub fn symbol_{i}() -> usize {{ {i} }}\\n"
+                f"// cross-reference symbol_{(i + 1) % 100}\\n",
+                encoding="utf-8",
+            )
+        client = Client(binary, max_workers=4)
+        try:
+            long_history = [
+                {"role": "user", "content": f"history {i}: " + "context " * 90}
+                for i in range(140)
+            ]
+            calls = [
+                call(8000 + i, "compress_history",
+                     {"messages": long_history, "max_tokens": 500})
+                for i in range(8)
+            ]
+            calls.extend([
+                call(8100, "navigate_codebase",
+                     {"root": str(root), "query": "symbol_37", "max_tokens": 512}),
+                call(8101, "get_token_stats", {}),
+            ])
+            client.send(calls)
+            responses = client.collect([*range(8000, 8008), 8100, 8101],
+                                       deadline_seconds=90)
+            for response in responses.values():
+                check_ok(response)
+
+            first = check_ok(responses[8100])
+            assert first["scan_result"]["kind"] == "fresh", first["scan_result"]
+
+            # Consecutive scans without a root must reuse the same cache,
+            # even though the stdio navigator lives outside SophonServer.
+            client.send([
+                call(8102, "navigate_codebase", {"query": "symbol_38"}),
+                call(8103, "navigate_codebase", {"query": "symbol_39"}),
+            ])
+            cached = client.collect([8102, 8103], deadline_seconds=60)
+            for response in cached.values():
+                scan = check_ok(response)["scan_result"]
+                assert scan["kind"] == "incremental", scan
+                assert scan["updated"] == 0 and scan["added"] == 0, scan
+
+            # Verify the separate stat collector observes all three scans and
+            # returns totals that match the exact same module snapshot.
+            client.send([call(8104, "get_token_stats", {})])
+            snapshot = check_ok(client.collect([8104])[8104])
+            modules = snapshot["modules"]
+            totals = snapshot["totals"]
+            assert modules["codebase_navigator"]["calls"] == 3, modules
+            assert totals["calls"] == sum(x["calls"] for x in modules.values())
+            for key in ("original_tokens", "compressed_tokens"):
+                assert totals[key] == sum(x[key] for x in modules.values())
+
+            # Invalid paths produce tool errors without erasing the cache.
+            client.send([call(8105, "navigate_codebase",
+                              {"root": str(root / "missing-dir")})])
+            invalid = client.collect([8105])[8105]
+            assert invalid["result"]["isError"] is True, invalid
+            client.send([call(8106, "navigate_codebase", {"query": "symbol_40"})])
+            recovered = check_ok(client.collect([8106])[8106])
+            assert recovered["scan_result"]["kind"] == "incremental", recovered
+
+            return {
+                "files": 100,
+                "concurrent_memory_calls": 8,
+                "navigator_scans": 4,
+                "cache_reused": True,
+                "statistics_consistent": True,
+                "invalid_path_recovered": True,
+            }
+        finally:
+            client.close()
+
+
 def cancellation_test(binary):
     client = Client(binary, max_workers=1)
     try:
@@ -229,6 +310,7 @@ def main():
         client.close()
     report["cancellation"] = cancellation_test(args.binary)
     report["mixed_workload"] = mixed_workload_test(args.binary)
+    report["navigator_and_stats"] = navigator_and_stats_test(args.binary)
     print(json.dumps(report, indent=2))
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
