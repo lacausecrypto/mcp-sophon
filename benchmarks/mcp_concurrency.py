@@ -178,9 +178,18 @@ def mixed_workload_test(binary):
             "messages": large, "max_tokens": 500}) for i in range(16)]
         pure = [call(7100 + i, "count_tokens", {"text": "fast-path " * 30})
                 for i in range(4)]
-        client.send(stateful + pure)
-        responses = client.collect([*range(7000, 7016), *range(7100, 7104)],
-                                   deadline_seconds=60)
+        with tempfile.TemporaryDirectory(prefix="sophon-stateful-split-") as directory:
+            path = Path(directory) / "readme.txt"
+            path.write_text("stateful modules are isolated\\n", encoding="utf-8")
+            independent_state = [
+                call(7200, "read_file_delta", {"path": str(path)}),
+                call(7201, "encode_fragments", {"content": "lightweight encode payload"}),
+            ]
+            client.send(stateful + pure + independent_state)
+            responses = client.collect(
+                [*range(7000, 7016), *range(7100, 7104), 7200, 7201],
+                deadline_seconds=60,
+            )
         for response in responses.values():
             check_ok(response)
         completion_order = list(responses)
@@ -188,7 +197,16 @@ def mixed_workload_test(binary):
         first_pure = min(completion_order.index(i) for i in range(7100, 7104))
         assert first_pure < last_stateful, (
             f"Pure tools starved behind serialised tools: {completion_order}")
-        return {"queued_stateful": 16, "pure": 4, "pure_serviced_early": True}
+        first_delta = completion_order.index(7200)
+        first_fragment = completion_order.index(7201)
+        assert first_delta < last_stateful, (
+            f"Delta module starved behind memory: {completion_order}")
+        assert first_fragment < last_stateful, (
+            f"Fragment module starved behind memory: {completion_order}")
+        return {
+            "queued_stateful": 16, "pure": 4, "pure_serviced_early": True,
+            "delta_serviced_early": True, "fragment_serviced_early": True,
+        }
     finally:
         client.close()
 
