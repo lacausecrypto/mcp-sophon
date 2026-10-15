@@ -87,6 +87,7 @@ jobs:
       - run: node -c install.js
       - run: node -c bin/sophon.js
       - run: node -e "JSON.parse(require('fs').readFileSync('package.json'))"
+      - run: npm test
 
   benchmark-driver-tests:
     name: Benchmark driver tests
