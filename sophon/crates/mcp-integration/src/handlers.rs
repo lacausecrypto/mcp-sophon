@@ -160,11 +160,13 @@ fn authorize_path_with_root(
 /// Pure tools may be computed without acquiring the shared mutable server
 /// lock. Their result is returned with optional compression statistics, which
 /// the transport commits after the computation has finished.
+type IndependentToolResult = anyhow::Result<(Value, Option<(usize, usize)>)>;
+
 pub(crate) fn independent_tool_call(
     name: &str,
     arguments: Value,
     output_compressor: &output_compressor::OutputCompressor,
-) -> Option<anyhow::Result<(Value, Option<(usize, usize)>)>> {
+) -> Option<IndependentToolResult> {
     match name {
         "count_tokens" => Some((|| {
             let args: CountTokensArgs = serde_json::from_value(arguments)?;
