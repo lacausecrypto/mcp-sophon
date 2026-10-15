@@ -229,7 +229,7 @@ fn scan_explicit_paths(
     // different subset depending on thread scheduling.
     let mut candidates: Vec<(PathBuf, PathBuf, std::fs::Metadata)> = Vec::new();
     for rel in paths {
-        if candidates.len() >= max_files {
+        if sophon_core::cancellation::is_cancelled() || candidates.len() >= max_files {
             break;
         }
         let absolute = root.join(&rel);
@@ -245,11 +245,15 @@ fn scan_explicit_paths(
         candidates.push((rel, absolute, metadata));
     }
 
+    let stop = sophon_core::cancellation::current_signal();
     // Then read + parse in parallel. `rayon`'s work-stealing scheduler
     // keeps every core busy even when file sizes are wildly uneven.
     candidates
         .into_par_iter()
         .filter_map(|(rel, absolute, metadata)| {
+            if stop.as_ref().is_some_and(|s| s.load(std::sync::atomic::Ordering::Acquire)) {
+                return None;
+            }
             let extractor = registry.for_path(&absolute)?;
             let content = std::fs::read_to_string(&absolute).ok()?;
             let symbols = extractor.extract(&content);
@@ -437,7 +441,7 @@ fn scan_with_ignore_walker(
     // expensive read+parse stage.
     let mut candidates: Vec<(PathBuf, std::fs::Metadata)> = Vec::new();
     for entry in walk_with_ignore(root_canonical).flatten() {
-        if candidates.len() >= max_files {
+        if sophon_core::cancellation::is_cancelled() || candidates.len() >= max_files {
             break;
         }
         if entry.file_type().map(|t| !t.is_file()).unwrap_or(true) {
@@ -457,9 +461,13 @@ fn scan_with_ignore_walker(
     }
 
     let root = root_canonical.to_path_buf();
+    let stop = sophon_core::cancellation::current_signal();
     candidates
         .into_par_iter()
         .filter_map(|(path, metadata)| {
+            if stop.as_ref().is_some_and(|s| s.load(std::sync::atomic::Ordering::Acquire)) {
+                return None;
+            }
             let extractor = registry.for_path(&path)?;
             let content = std::fs::read_to_string(&path).ok()?;
             let symbols = extractor.extract(&content);

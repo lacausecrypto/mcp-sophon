@@ -78,6 +78,9 @@ impl VectorIndex {
         let n = self.ids.len();
         let mut scored: Vec<(usize, f32)> = Vec::with_capacity(n);
         for i in 0..n {
+            if i % 256 == 0 && sophon_core::cancellation::is_cancelled() {
+                return Vec::new();
+            }
             let start = i * self.dim;
             let mut s = 0.0f32;
             // Manual loop unrolling helps a tiny bit on CPU; stick to the

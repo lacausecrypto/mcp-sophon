@@ -106,6 +106,13 @@ impl RuntimeFlag {
             kind: FlagKind::Path,
             description: "JSON snapshot path for the graph-memory store.",
         },
+        // -------- transport / concurrent worker limits --------
+        RuntimeFlag {
+            name: "SOPHON_MAX_CONCURRENT_TOOLS",
+            scope: FlagScope::Transport,
+            kind: FlagKind::UInt { min: 1, max: 64 },
+            description: "Maximum concurrently executing blocking MCP tools (default 8; excess requests wait and remain cancellable).",
+        },
         // -------- retrieval --------
         RuntimeFlag {
             name: "SOPHON_EMBEDDER",

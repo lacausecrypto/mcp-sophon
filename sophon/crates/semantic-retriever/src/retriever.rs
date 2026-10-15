@@ -272,6 +272,9 @@ impl Retriever {
         let chunks = chunk_messages(messages, &self.config.chunk_config);
         let mut added = 0;
         for mut chunk in chunks {
+            if sophon_core::cancellation::is_cancelled() {
+                return Err(RetrieverError::Index("request cancelled".to_string()));
+            }
             if self.store.contains(&chunk.id) {
                 continue;
             }

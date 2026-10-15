@@ -151,6 +151,9 @@ impl Bm25Index {
 
         let mut scored: Vec<(usize, f32)> = Vec::new();
         for (doc_pos, doc) in self.docs.iter().enumerate() {
+            if doc_pos % 256 == 0 && sophon_core::cancellation::is_cancelled() {
+                return Vec::new();
+            }
             let mut s = 0.0f32;
             let dl_norm = doc.length as f32 / avgdl;
             for term in &q_set {

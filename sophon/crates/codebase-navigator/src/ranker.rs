@@ -80,6 +80,9 @@ pub fn rank_files(records: &[FileRecord], query: Option<&str>) -> RankResult {
     let mut out_edges: Vec<HashSet<usize>> = vec![HashSet::new(); n];
     let mut edge_count = 0usize;
     for (i, rec) in records.iter().enumerate() {
+        if sophon_core::cancellation::is_cancelled() {
+            break;
+        }
         for token in TOKEN_RE.find_iter(&rec.content) {
             let name = token.as_str();
             if let Some(targets) = defs.get(name) {
@@ -153,6 +156,9 @@ pub fn rank_files(records: &[FileRecord], query: Option<&str>) -> RankResult {
             .sum();
 
         for (i, edges) in out_edges.iter().enumerate() {
+            if sophon_core::cancellation::is_cancelled() {
+                break;
+            }
             if edges.is_empty() {
                 continue;
             }

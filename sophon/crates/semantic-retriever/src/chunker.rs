@@ -241,6 +241,9 @@ pub fn chunk_messages(messages: &[ChunkInputMessage<'_>], config: &ChunkConfig) 
     let mut seen: HashSet<String> = HashSet::new();
 
     for msg in messages {
+        if sophon_core::cancellation::is_cancelled() {
+            break;
+        }
         // Tool-call detection runs first so identical invocations
         // dedup via the canonical form regardless of how the
         // surrounding message was punctuated. Detected tool calls
