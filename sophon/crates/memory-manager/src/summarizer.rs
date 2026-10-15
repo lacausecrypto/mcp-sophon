@@ -188,6 +188,9 @@ pub fn heuristic_summarize(messages: &[Message]) -> String {
     let mut code_mentions = 0usize;
 
     for message in messages {
+        if sophon_core::cancellation::is_cancelled() {
+            break;
+        }
         if message.content.contains("```") {
             code_mentions += 1;
         }
