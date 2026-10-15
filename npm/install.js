@@ -117,7 +117,7 @@ function readArchiveExecutable(archivePath, archiveName, platformKey = key()) {
   const valid = platformKey.startsWith('linux-')
     ? header.equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])) // ELF
     : platformKey.startsWith('darwin-')
-      ? ['cffaedfe', 'feedfacf', 'cafebabe', 'bebafeca'].includes(header.toString('hex')) // Mach-O
+      ? ['cffaedfe', 'feedfacf', 'cafebabe', 'bebafeca', 'cafebabf', 'bfbafeca'].includes(header.toString('hex')) // Mach-O
       : binary.subarray(0, 2).toString('ascii') === 'MZ'; // PE
   if (binary.length < 4096 || !valid) {
     throw new Error(`archive entry ${member} is not a valid executable for ${platformKey}`);
@@ -185,8 +185,6 @@ async function main() {
     // Never overwrite another process's already-present binary.
     fs.copyFileSync(stagedBinary, finalBinary, fs.constants.COPYFILE_EXCL);
     if (!isWindows) fs.chmodSync(finalBinary, 0o755);
-  } catch (e) {
-    fail(`safe archive installation failed: ${e.message}`);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
