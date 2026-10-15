@@ -614,7 +614,10 @@ pub(crate) fn run_navigate_codebase(
 
     let mut value = serde_json::to_value(digest)?;
     if let Some(object) = value.as_object_mut() {
-        object.insert("scan_result".to_string(), serde_json::to_value(&scan_result)?);
+        object.insert(
+            "scan_result".to_string(),
+            serde_json::to_value(&scan_result)?,
+        );
     }
     Ok((value, original_estimate, compressed_tokens))
 }
@@ -1151,10 +1154,14 @@ mod phase1_concurrency_tests {
         let expected = server
             .handle_tool_call("compress_output", args.clone())
             .unwrap();
-        let (independent, stats) =
-            independent_tool_call("compress_output", args, &server.output_compressor, &server.stats)
-                .unwrap()
-                .unwrap();
+        let (independent, stats) = independent_tool_call(
+            "compress_output",
+            args,
+            &server.output_compressor,
+            &server.stats,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(independent, expected);
         assert!(stats.is_some());
 
@@ -1162,10 +1169,14 @@ mod phase1_concurrency_tests {
         let expected = server
             .handle_tool_call("count_tokens", args.clone())
             .unwrap();
-        let (independent, stats) =
-            independent_tool_call("count_tokens", args, &server.output_compressor, &server.stats)
-                .unwrap()
-                .unwrap();
+        let (independent, stats) = independent_tool_call(
+            "count_tokens",
+            args,
+            &server.output_compressor,
+            &server.stats,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(independent, expected);
         assert!(stats.is_none());
     }
