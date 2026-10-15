@@ -434,7 +434,11 @@ impl SophonServer {
         // to its CancellationToken. notifications/cancelled looks up by
         // id and triggers cancel; the spawned task removes itself when
         // it finishes (or is cancelled).
-        let pending: Arc<Mutex<HashMap<String, (CancellationToken, Arc<AtomicBool>)>>> =
+        struct InFlight {
+            token: CancellationToken,
+            stop: Arc<AtomicBool>,
+        }
+        let pending: Arc<Mutex<HashMap<String, InFlight>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
         // Stdout is shared across spawned tool tasks. Wrap in a Mutex
@@ -488,7 +492,7 @@ impl SophonServer {
                         write_response(&out, &error).await?;
                         continue;
                     }
-                    map.insert(id_key.clone(), (token.clone(), Arc::clone(&stopped)));
+                    map.insert(id_key.clone(), InFlight { token: token.clone(), stop: Arc::clone(&stopped) });
                 }
 
                 let server_for_task = Arc::clone(&server);
@@ -577,9 +581,9 @@ impl SophonServer {
                 let target_key = canonical_id_key(&target_id);
                 let cancelled = {
                     let mut map = pending.lock().await;
-                    if let Some((token, stop)) = map.remove(&target_key) {
-                        stop.store(true, Ordering::Release);
-                        token.cancel();
+                    if let Some(state) = map.remove(&target_key) {
+                        state.stop.store(true, Ordering::Release);
+                        state.token.cancel();
                         true
                     } else {
                         false
