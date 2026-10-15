@@ -470,43 +470,65 @@ pub(crate) fn run_update_memory_tool(
     cancellation: Option<&CancellationToken>,
 ) -> anyhow::Result<Value> {
     check_cancel(cancellation)?;
-    let args: UpdateMemoryArgs = serde_json::from_value(arguments).unwrap_or_default();
+    // Empty input remains an explicitly supported no-op; malformed JSON
+    // must never silently become an empty update or accidental reset.
+    let args: UpdateMemoryArgs = if arguments.is_null() {
+        UpdateMemoryArgs::default()
+    } else {
+        serde_json::from_value(arguments)?
+    };
 
-    if args.reset {
-        memory.reset();
-    }
+    let new_msgs = args
+        .messages
+        .into_iter()
+        .map(|m| Message::new(parse_role(&m.role), m.content))
+        .collect::<Vec<_>>();
 
+    // Graph ingestion can include expensive extraction. Stage it in RAM
+    // without touching the live graph or disk; cancellation before the
+    // memory commit leaves both the history and graph unchanged.
+    let mut staged_graph = None;
     let mut graph_ingest_summary: Option<Value> = None;
-    if !args.messages.is_empty() {
-        let new_msgs = args
-            .messages
-            .into_iter()
-            .map(|m| Message::new(parse_role(&m.role), m.content))
-            .collect::<Vec<_>>();
-
-        // Path A: if graph memory is active, extract triples
-        // from the NEW batch before appending. One Haiku call
-        // per update_memory — the only LLM cost of the graph
-        // path; query time stays pure Rust.
-        if let Some(graph) = graph.as_mut() {
+    if !new_msgs.is_empty() {
+        if let Some(live_graph) = graph.as_ref() {
+            let mut prepared = live_graph.clone();
             let chunk_id = format!("update-{}", Utc::now().timestamp_millis());
             let now = Utc::now().to_rfc3339();
-            // Parallelised extraction via rayon — up to N×
-            // speed-up on long batches (one Haiku call per
-            // ~30-message slice, run concurrently).
-            let report = ingest_messages_batched(graph, &new_msgs, &chunk_id, &now, None);
-            let _ = graph.save(); // best-effort persistence
+            let report = ingest_messages_batched(&mut prepared, &new_msgs, &chunk_id, &now, None);
             graph_ingest_summary = Some(json!({
                 "triples_seen": report.triples_seen,
                 "new_facts": report.new_facts,
                 "merged_facts": report.merged_facts,
                 "new_entities": report.new_entities,
-                "fact_total": graph.fact_count(),
-                "entity_total": graph.entity_count(),
+                "fact_total": prepared.fact_count(),
+                "entity_total": prepared.entity_count(),
             }));
+            staged_graph = Some(prepared);
         }
+    }
 
-        memory.append(new_msgs);
+    check_cancel(cancellation)?;
+    // The memory manager persists the entire resulting JSONL snapshot
+    // atomically before updating RAM. A reset-with-messages is ONE commit.
+    if args.reset {
+        memory.try_replace(new_msgs)?;
+    } else if !new_msgs.is_empty() {
+        memory.try_append(new_msgs)?;
+    }
+
+    if let Some(prepared) = staged_graph {
+        // Cross-file transactions (memory JSONL + graph JSON) require a
+        // journal; they are NOT claimed here. Memory is the authoritative
+        // committed session. A graph persistence failure is returned in
+        // structured metadata, rather than discarded silently or turned
+        // into a retryable error that could duplicate the memory update.
+        if let Err(err) = prepared.save() {
+            tracing::warn!(error = %err, "graph snapshot persistence failed after memory commit");
+            if let Some(summary) = graph_ingest_summary.as_mut() {
+                summary["persistence_error"] = json!(err.to_string());
+            }
+        }
+        *graph = Some(prepared);
     }
 
     let return_snapshot = args.return_snapshot.unwrap_or(true);
