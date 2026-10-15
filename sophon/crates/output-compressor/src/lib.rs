@@ -48,7 +48,7 @@ impl Default for OutputCompressorConfig {
 
 /// Facade that owns the filter registry and (optionally) writes raw
 /// outputs to a tee directory.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OutputCompressor {
     registry: FilterRegistry,
     config: OutputCompressorConfig,
