@@ -114,9 +114,7 @@ impl ChunkStore {
         let mut new_ids = HashSet::new();
         let staged: Vec<Chunk> = chunks
             .into_iter()
-            .filter(|chunk| {
-                !self.by_id.contains_key(&chunk.id) && new_ids.insert(chunk.id.clone())
-            })
+            .filter(|chunk| !self.by_id.contains_key(&chunk.id) && new_ids.insert(chunk.id.clone()))
             .collect();
         if staged.is_empty() {
             return Ok(0);
@@ -205,22 +203,31 @@ mod tests {
         let backup = dir.path().join("saved.jsonl");
         let mut store = ChunkStore::open(&path).unwrap();
         assert_eq!(
-            store.insert_batch(vec![
-                sample_chunk("a", "first"),
-                sample_chunk("b", "second"),
-            ]).unwrap(),
+            store
+                .insert_batch(vec![
+                    sample_chunk("a", "first"),
+                    sample_chunk("b", "second"),
+                ])
+                .unwrap(),
             2
         );
         let committed = fs::read(&path).unwrap();
         assert_eq!(committed.iter().filter(|&&b| b == b'\n').count(), 2);
-        assert_eq!(store.insert_batch(vec![sample_chunk("b", "second")]).unwrap(), 0);
+        assert_eq!(
+            store
+                .insert_batch(vec![sample_chunk("b", "second")])
+                .unwrap(),
+            0
+        );
 
         fs::rename(&path, &backup).unwrap();
         fs::create_dir(&path).unwrap();
-        assert!(store.insert_batch(vec![
-            sample_chunk("c", "new first"),
-            sample_chunk("d", "new second"),
-        ]).is_err());
+        assert!(store
+            .insert_batch(vec![
+                sample_chunk("c", "new first"),
+                sample_chunk("d", "new second"),
+            ])
+            .is_err());
         assert_eq!(store.len(), 2);
         assert!(!store.contains("c"));
         assert!(!store.contains("d"));
