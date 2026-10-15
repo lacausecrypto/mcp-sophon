@@ -433,8 +433,8 @@ impl SophonServer {
 
     pub async fn run_stdio(mut self) -> anyhow::Result<()> {
         use crate::jsonrpc::{error_response, PARSE_ERROR};
-        use tokio::io::{self, AsyncBufReadExt, BufReader};
-        use tokio::sync::{Mutex, Semaphore};
+        use tokio::io;
+        use tokio::sync::{mpsc, Mutex, Semaphore};
 
         // Stateless computations use a snapshot; stateful mutations remain
         // serialized to preserve their existing transaction boundaries.
@@ -507,16 +507,31 @@ impl SophonServer {
         let out: Arc<Mutex<io::BufWriter<io::Stdout>>> =
             Arc::new(Mutex::new(io::BufWriter::new(io::stdout())));
 
+        // Tokio's async stdin internally occupies a spawn_blocking thread
+        // for the lifetime of a blocking read. Under certain runtimes this
+        // can starve the tool worker pool. Read from a dedicated OS thread
+        // instead and use a bounded channel to apply stdin backpressure.
+        let (line_tx, mut lines) = mpsc::channel::<std::io::Result<String>>(128);
+        std::thread::Builder::new()
+            .name("sophon-stdin".to_string())
+            .spawn(move || {
+                use std::io::BufRead;
+                let stdin = std::io::stdin();
+                for line in stdin.lock().lines() {
+                    if line_tx.blocking_send(line).is_err() {
+                        break;
+                    }
+                }
+            })?;
         tracing::debug!("stdio server initialized; admission queues ready");
-        let stdin = io::stdin();
-        let mut lines = BufReader::new(stdin).lines();
         // Track every spawned tool task so we can drain them on
         // stdin EOF — without this, a client that closes the pipe
         // immediately after issuing a request would race the
         // spawn/response and miss the reply.
         let mut tool_tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
 
-        while let Some(line) = lines.next_line().await? {
+        while let Some(line) = lines.recv().await {
+            let line = line?;
             // Reap completed tasks during long-lived sessions, not only
             // after stdin EOF; otherwise JoinSet grows with every request.
             while let Some(joined) = tool_tasks.try_join_next() {
@@ -959,6 +974,7 @@ impl SophonServer {
                             .map(|response| (response, None))
                     });
 
+                    tracing::debug!(request_id = %id_key, "stdio blocking worker submitted");
                     // A cancelled blocking worker must terminate before its
                     // permit is released. Never detach potentially mutating work.
                     let completed = tokio::select! {
