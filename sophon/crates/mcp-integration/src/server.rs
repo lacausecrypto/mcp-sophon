@@ -550,7 +550,12 @@ impl SophonServer {
                 let navigator_call = tool_name == Some("navigate_codebase");
                 let independent = matches!(
                     tool_name,
-                    Some("count_tokens" | "compress_output" | "get_token_stats" | "navigate_codebase")
+                    Some(
+                        "count_tokens"
+                            | "compress_output"
+                            | "get_token_stats"
+                            | "navigate_codebase"
+                    )
                 );
 
                 tool_tasks.spawn(async move {
@@ -621,6 +626,7 @@ impl SophonServer {
 
                     let worker_token = token.clone();
                     let worker_server = Arc::clone(&server_for_task);
+                    let worker_stats = stats_for_task.clone();
                     let mut work = tokio::task::spawn_blocking(move || {
                         if worker_token.is_cancelled() {
                             return Ok((None, None));
@@ -656,7 +662,7 @@ impl SophonServer {
                             };
                         }
                         if let Some((response, stats)) =
-                            independent_rpc_response(&parsed, &output_for_task, &stats_for_task)
+                            independent_rpc_response(&parsed, &output_for_task, &worker_stats)
                         {
                             return Ok((Some(response), stats));
                         }
@@ -978,7 +984,10 @@ impl StatsCollector {
     }
 
     pub fn snapshot(&self) -> HashMap<String, ModuleStats> {
-        self.per_module.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.per_module
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn totals(&self) -> ModuleStats {
@@ -994,12 +1003,14 @@ impl StatsCollector {
     }
 
     fn sum_modules(modules: &HashMap<String, ModuleStats>) -> ModuleStats {
-        modules.values().fold(ModuleStats::default(), |mut acc, st| {
-            acc.calls += st.calls;
-            acc.original_tokens += st.original_tokens;
-            acc.compressed_tokens += st.compressed_tokens;
-            acc
-        })
+        modules
+            .values()
+            .fold(ModuleStats::default(), |mut acc, st| {
+                acc.calls += st.calls;
+                acc.original_tokens += st.original_tokens;
+                acc.compressed_tokens += st.compressed_tokens;
+                acc
+            })
     }
 }
 
