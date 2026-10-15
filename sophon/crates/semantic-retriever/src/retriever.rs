@@ -314,9 +314,9 @@ impl Retriever {
         // in-memory index entries. A failure preserves the prior JSONL file,
         // vector index, BM25 and entity graph; cancellation is not checked
         // in this short durable commit stage.
-        let added = self.store.insert_batch(
-            prepared.iter().map(|(chunk, _)| chunk.clone()).collect(),
-        )?;
+        let added = self
+            .store
+            .insert_batch(prepared.iter().map(|(chunk, _)| chunk.clone()).collect())?;
         for (chunk, embedding) in prepared {
             self.index
                 .upsert(&chunk.id, &embedding)
