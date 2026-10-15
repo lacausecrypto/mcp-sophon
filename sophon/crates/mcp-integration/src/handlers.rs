@@ -839,8 +839,11 @@ fn run_retrieval(
         .collect();
 
     check_cancel(cancellation)?;
-    // Index incrementally — duplicates are skipped at the store layer.
-    let _ = retriever.index_messages(&inputs)?;
+    // Prepare every embedding before starting the durable commit. During
+    // the commit no cancellation checkpoint can expose a half-indexed batch.
+    let _ = retriever.index_messages_with_cancel(&inputs, || {
+        cancellation.is_some_and(CancellationToken::is_cancelled)
+    })?;
 
     let t0 = std::time::Instant::now();
 
