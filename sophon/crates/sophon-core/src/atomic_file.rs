@@ -15,7 +15,10 @@ static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 /// Replace a single file atomically, preserving old bytes if staging or the
 /// rename fails. The caller must serialize concurrent writes to the same path.
 pub fn replace(path: &Path, contents: &[u8]) -> io::Result<()> {
-    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     fs::create_dir_all(parent)?;
     let basename = path.file_name().ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "destination has no filename")
@@ -69,21 +72,36 @@ pub fn replace(path: &Path, contents: &[u8]) -> io::Result<()> {
 mod tests {
     use super::replace;
     use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
+
+    fn fixture() -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "sophon-atomic-tests-{}-{}",
+            std::process::id(),
+            NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed),
+        ));
+        fs::create_dir(&path).unwrap();
+        path
+    }
 
     #[test]
     fn replaces_existing_content_without_a_temp_left_behind() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("state.json");
+        let dir = fixture();
+        let path = dir.join("state.json");
         fs::write(&path, b"old").unwrap();
         replace(&path, b"new").unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"new");
-        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn failure_preserves_existing_directory_and_cleans_staging_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("state.json");
+        let dir = fixture();
+        let target = dir.join("state.json");
         fs::create_dir(&target).unwrap();
         assert!(replace(&target, b"new").is_err());
         assert!(target.is_dir());
