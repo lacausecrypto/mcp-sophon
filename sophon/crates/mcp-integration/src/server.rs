@@ -507,6 +507,7 @@ impl SophonServer {
         let out: Arc<Mutex<io::BufWriter<io::Stdout>>> =
             Arc::new(Mutex::new(io::BufWriter::new(io::stdout())));
 
+        tracing::debug!("stdio server initialized; admission queues ready");
         let stdin = io::stdin();
         let mut lines = BufReader::new(stdin).lines();
         // Track every spawned tool task so we can drain them on
@@ -577,6 +578,7 @@ impl SophonServer {
                     }
                     requests.insert(id_key.clone(), token.clone());
                 }
+                tracing::debug!(request_id = %id_key, "stdio tool queued");
 
                 let server_for_task = Arc::clone(&server);
                 let pending_for_task = Arc::clone(&pending);
@@ -778,6 +780,7 @@ impl SophonServer {
                         None
                     };
 
+                    tracing::debug!(request_id = %id_key, "stdio module admission complete");
                     // Cancel queued work before acquiring a blocking worker.
                     let permit = tokio::select! {
                         biased;
@@ -798,10 +801,13 @@ impl SophonServer {
                         return;
                     }
 
+                    tracing::debug!(request_id = %id_key, "stdio worker slot acquired");
+                    let worker_request_id = id_key.clone();
                     let worker_token = token.clone();
                     let worker_server = Arc::clone(&server_for_task);
                     let worker_stats = stats_for_task.clone();
                     let mut work = tokio::task::spawn_blocking(move || {
+                        tracing::debug!(request_id = %worker_request_id, "stdio worker running");
                         if worker_token.is_cancelled() {
                             return Ok((None, None));
                         }
@@ -963,6 +969,7 @@ impl SophonServer {
                         }
                         result = &mut work => Some(result),
                     };
+                    tracing::debug!(request_id = %id_key, "stdio worker joined");
                     drop(permit);
                     drop(prompt_permit);
                     drop(retrieval_permit);
