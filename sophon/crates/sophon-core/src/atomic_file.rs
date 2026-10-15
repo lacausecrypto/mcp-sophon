@@ -109,6 +109,7 @@ mod tests {
         fs::create_dir(&target).unwrap();
         assert!(replace(&target, b"new").is_err());
         assert!(target.is_dir());
-        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        fs::remove_dir_all(dir).unwrap();
     }
 }
