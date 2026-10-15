@@ -38,7 +38,7 @@ jobs:
 
       - name: Build PR binary
         run: |
-          cargo build --release --locked --manifest-path sophon/Cargo.toml -p mcp-integration
+          cargo build --release --manifest-path sophon/Cargo.toml -p mcp-integration
           cp sophon/target/release/sophon "$RUNNER_TEMP/sophon-head"
 
       - name: Checkout exact base commit
@@ -46,9 +46,11 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
 
+      # Match the existing CI build flags; Cargo.lock currently requires regeneration.
+      # Avoid --locked until it is refreshed and committed independently.
       - name: Build main binary with same toolchain
         run: |
-          cargo build --release --locked --manifest-path sophon/Cargo.toml -p mcp-integration
+          cargo build --release --manifest-path sophon/Cargo.toml -p mcp-integration
           cp sophon/target/release/sophon "$RUNNER_TEMP/sophon-base"
 
       - name: Restore PR benchmark scripts
