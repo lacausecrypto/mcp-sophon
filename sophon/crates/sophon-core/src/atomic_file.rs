@@ -33,7 +33,11 @@ pub fn replace(path: &Path, contents: &[u8]) -> io::Result<()> {
             id
         );
         let staged = parent.join(temp_name);
-        let mut file = match OpenOptions::new().write(true).create_new(true).open(&staged) {
+        let mut file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staged)
+        {
             Ok(file) => file,
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(err) => return Err(err),
