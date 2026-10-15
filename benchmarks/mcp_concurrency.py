@@ -8,6 +8,7 @@ and verifies shared-memory integrity, cancellation and process liveness.
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import math
 import os
@@ -20,7 +21,9 @@ from pathlib import Path
 
 
 class Client:
-    def __init__(self, binary: Path, max_workers: int = 8):
+    def __init__(self, binary: Path, max_workers: int = 8,
+                 env_overrides: dict[str, str] | None = None,
+                 diagnostics: bool = False):
         env = os.environ.copy()
         env["SOPHON_MAX_CONCURRENT_TOOLS"] = str(max_workers)
         env["SOPHON_NO_LLM_SUMMARY"] = "1"
@@ -29,14 +32,30 @@ class Client:
                      "SOPHON_GRAPH_MEMORY", "SOPHON_GRAPH_MEMORY_PATH",
                      "SOPHON_ROLLING_SUMMARY", "SOPHON_ALLOWED_ROOT"):
             env.pop(name, None)
+        if env_overrides:
+            env.update(env_overrides)
+        if diagnostics:
+            env["RUST_LOG"] = "debug"
+        self.stderr_tail = collections.deque(maxlen=100)
         self.proc = subprocess.Popen(
             [str(binary.resolve()), "serve"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, env=env, bufsize=0,
+            stderr=subprocess.PIPE if diagnostics else subprocess.DEVNULL,
+            env=env, bufsize=0,
         )
+        if diagnostics:
+            self.stderr_thread = threading.Thread(
+                target=self._stderr_reader, daemon=True,
+            )
+            self.stderr_thread.start()
         self.received: queue.Queue = queue.Queue()
         self.thread = threading.Thread(target=self._reader, daemon=True)
         self.thread.start()
+
+    def _stderr_reader(self):
+        assert self.proc.stderr is not None
+        for raw in self.proc.stderr:
+            self.stderr_tail.append(raw.decode(errors="replace").strip())
 
     def _reader(self):
         assert self.proc.stdout is not None
@@ -63,7 +82,8 @@ class Client:
             if remaining <= 0:
                 raise AssertionError(
                     f"Timeout/deadlock waiting for {sorted(expected - responses.keys())}; "
-                    f"process={self.proc.poll()}"
+                    f"process={self.proc.poll()}; "
+                    f"server_stderr_tail={list(self.stderr_tail)[-25:]}"
                 )
             try:
                 result = self.received.get(timeout=min(remaining, 0.5))
@@ -175,9 +195,23 @@ def mixed_workload_test(binary):
             "messages": large, "max_tokens": 500}) for i in range(16)]
         pure = [call(7100 + i, "count_tokens", {"text": "fast-path " * 30})
                 for i in range(4)]
-        client.send(stateful + pure)
-        responses = client.collect([*range(7000, 7016), *range(7100, 7104)],
-                                   deadline_seconds=60)
+        with tempfile.TemporaryDirectory(prefix="sophon-stateful-split-") as directory:
+            path = Path(directory) / "readme.txt"
+            path.write_text("stateful modules are isolated\\n", encoding="utf-8")
+            independent_state = [
+                call(7200, "read_file_delta", {"path": str(path)}),
+                call(7201, "encode_fragments", {"content": "lightweight encode payload"}),
+                call(7202, "compress_prompt", {
+                    "prompt": "<core_identity>Be a careful assistant.</core_identity>"
+                              "<code_formatting>Use code blocks.</code_formatting>",
+                    "query": "careful assistant",
+                }),
+            ]
+            client.send(stateful + pure + independent_state)
+            responses = client.collect(
+                [*range(7000, 7016), *range(7100, 7104), 7200, 7201, 7202],
+                deadline_seconds=60,
+            )
         for response in responses.values():
             check_ok(response)
         completion_order = list(responses)
@@ -185,7 +219,20 @@ def mixed_workload_test(binary):
         first_pure = min(completion_order.index(i) for i in range(7100, 7104))
         assert first_pure < last_stateful, (
             f"Pure tools starved behind serialised tools: {completion_order}")
-        return {"queued_stateful": 16, "pure": 4, "pure_serviced_early": True}
+        first_delta = completion_order.index(7200)
+        first_fragment = completion_order.index(7201)
+        first_prompt = completion_order.index(7202)
+        assert first_prompt < last_stateful, (
+            f"Prompt cache starved behind query-free memory: {completion_order}")
+        assert first_delta < last_stateful, (
+            f"Delta module starved behind memory: {completion_order}")
+        assert first_fragment < last_stateful, (
+            f"Fragment module starved behind memory: {completion_order}")
+        return {
+            "queued_stateful": 16, "pure": 4, "pure_serviced_early": True,
+            "delta_serviced_early": True, "fragment_serviced_early": True,
+            "prompt_serviced_early": True,
+        }
     finally:
         client.close()
 
@@ -277,8 +324,13 @@ def delta_fragment_integrity_test(binary):
     with tempfile.TemporaryDirectory(prefix="sophon-subsystems-") as directory:
         path = Path(directory) / "state.rs"
         path.write_text("pub const REVISION: u64 = 1;\n", encoding="utf-8")
-        client = Client(binary, max_workers=4)
+        client = Client(binary, max_workers=4, diagnostics=True)
         try:
+            # Prove the new subprocess entered its stdio loop before
+            # exercising the isolated delta state.
+            client.send([{"jsonrpc": "2.0", "id": 8999,
+                          "method": "initialize", "params": {}}])
+            assert "result" in client.collect([8999])[8999]
             client.send([call(9000, "read_file_delta", {"path": str(path)})])
             first = check_ok(client.collect([9000])[9000])
             assert first["Full"]["version"] == 1, first
@@ -414,6 +466,168 @@ def queued_mutation_cancellation_test(binary):
             client.close()
 
 
+
+def session_retriever_persistence_test(binary):
+    """Session history and durable retrieval must survive stdio restarts."""
+    with tempfile.TemporaryDirectory(prefix="sophon-session-index-") as directory:
+        root = Path(directory)
+        memory_file = root / "session.jsonl"
+        index_dir = root / "retriever"
+        env = {
+            "SOPHON_MEMORY_PATH": str(memory_file),
+            "SOPHON_RETRIEVER_PATH": str(index_dir),
+        }
+        client = Client(binary, max_workers=4, env_overrides=env,
+                        diagnostics=True)
+        try:
+            # Distinguish startup/handshake stalls from memory transactions.
+            client.send([{"jsonrpc": "2.0", "id": 9999,
+                          "method": "initialize", "params": {}}])
+            assert "result" in client.collect([9999], deadline_seconds=20)[9999]
+            # Concurrent session writes must be serialized *with the graph*
+            # but independent from other modules.
+            updates = [
+                call(10000 + i, "update_memory", {
+                    "messages": [{"role": "user",
+                                  "content": f"session checkpoint {i}: Belgian science archive"}],
+                    "return_snapshot": False,
+                })
+                for i in range(12)
+            ]
+            client.send(updates)
+            replies = client.collect(range(10000, 10012), deadline_seconds=90)
+            assert sorted(check_ok(v)["history_len"] for v in replies.values()) == list(
+                range(1, 13)
+            )
+
+            conversations = [
+                {"role": "user", "content": f"Research note {i}: Belgium science "
+                 "archive and astronomy foundations."}
+                for i in range(24)
+            ]
+            # Concurrent retrieval queries must index idempotently, and
+            # prompt scoring must keep using the live retriever.
+            jobs = [
+                call(10100 + i, "compress_history", {
+                    "messages": conversations,
+                    "query": "Belgium astronomy research foundations",
+                    "retrieval_top_k": 4,
+                    "max_tokens": 512,
+                })
+                for i in range(6)
+            ]
+            jobs.append(call(10110, "compress_prompt", {
+                "prompt": "<core_identity>Science research instructions.</core_identity>"
+                          "<code_formatting>Write safe code.</code_formatting>",
+                "query": "science archive",
+                "max_tokens": 90,
+            }))
+            client.send(jobs)
+            replies = client.collect([*range(10100, 10106), 10110],
+                                     deadline_seconds=120)
+            for i in range(10100, 10106):
+                result = check_ok(replies[i])
+                retrieval = result["retrieved_chunks"]
+                assert retrieval["total_searched"] > 0, retrieval
+                assert retrieval["chunks"], retrieval
+            assert "compressed_prompt" in check_ok(replies[10110])
+
+            # Same live state is available via the legacy protocol.
+            client.send([{
+                "tool": "update_memory",
+                "arguments": {
+                    "messages": [{"role": "user", "content": "legacy persisted memory"}],
+                    "return_snapshot": False,
+                },
+            }])
+            legacy = client.received.get(timeout=30)
+            assert legacy.get("ok") is True, legacy
+            assert legacy["result"]["history_len"] == 13, legacy
+            assert index_dir.joinpath("chunks.jsonl").is_file()
+        finally:
+            client.close()
+
+        assert len(memory_file.read_text(encoding="utf-8").splitlines()) == 13
+        chunk_lines = index_dir.joinpath("chunks.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        assert chunk_lines and all(json.loads(line) for line in chunk_lines)
+
+        # Resume from real disk state; querying without new input must reuse
+        # the prior index and must not insert duplicate chunks.
+        resumed = Client(binary, max_workers=4, env_overrides=env,
+                         diagnostics=True)
+        try:
+            resumed.send([{"jsonrpc": "2.0", "id": 10199,
+                           "method": "initialize", "params": {}}])
+            assert "result" in resumed.collect([10199], deadline_seconds=20)[10199]
+            resumed.send([
+                call(10200, "update_memory", {"return_snapshot": False}),
+                call(10201, "compress_history", {
+                    "messages": [],
+                    "query": "Belgium astronomy research foundations",
+                    "retrieval_top_k": 3,
+                }),
+            ])
+            response = resumed.collect([10200, 10201], deadline_seconds=60)
+            assert check_ok(response[10200])["history_len"] == 13
+            retrieved = check_ok(response[10201])["retrieved_chunks"]
+            assert retrieved["total_searched"] > 0
+            assert retrieved["chunks"]
+        finally:
+            resumed.close()
+        assert len(index_dir.joinpath("chunks.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()) == len(chunk_lines)
+        return {
+            "concurrent_memory_appends": 12,
+            "resume_memory_len": 13,
+            "simultaneous_index_queries": 6,
+            "persistent_retriever_reused": True,
+            "legacy_memory_shared": True,
+            "jsonl_recovered": True,
+        }
+
+
+def cancelled_memory_transaction_test(binary):
+    """Cancel a queued memory mutation before it reaches its module gate."""
+    with tempfile.TemporaryDirectory(prefix="sophon-session-cancel-") as directory:
+        path = Path(directory) / "memory.jsonl"
+        client = Client(binary, max_workers=1, env_overrides={
+            "SOPHON_MEMORY_PATH": str(path),
+        })
+        try:
+            history = [
+                {"role": "user", "content": f"long load {i} " + "memory " * 80}
+                for i in range(120)
+            ]
+            client.send([
+                *[call(10300 + i, "compress_history", {
+                    "messages": history, "max_tokens": 450,
+                }) for i in range(8)],
+                call(10350, "update_memory", {
+                    "messages": [{"role": "user",
+                                  "content": "must not persist when cancelled"}],
+                    "return_snapshot": False,
+                }),
+                {"jsonrpc": "2.0", "method": "notifications/cancelled",
+                 "params": {"requestId": 10350}},
+            ])
+            replies = client.collect(range(10300, 10308),
+                                     deadline_seconds=120)
+            for response in replies.values():
+                check_ok(response)
+            client.send([call(10360, "update_memory", {"return_snapshot": False})])
+            assert check_ok(client.collect([10360])[10360])["history_len"] == 0
+            assert not path.exists() or not path.read_text(encoding="utf-8").strip()
+            return {
+                "cancelled_memory_updates": 1,
+                "memory_file_untouched": True,
+            }
+        finally:
+            client.close()
+
+
 def cancellation_test(binary):
     client = Client(binary, max_workers=1)
     try:
@@ -457,6 +671,8 @@ def main():
     report["navigator_and_stats"] = navigator_and_stats_test(args.binary)
     report["delta_fragment_integrity"] = delta_fragment_integrity_test(args.binary)
     report["queued_mutation_cancellation"] = queued_mutation_cancellation_test(args.binary)
+    report["session_retriever_persistence"] = session_retriever_persistence_test(args.binary)
+    report["cancelled_memory_transaction"] = cancelled_memory_transaction_test(args.binary)
     print(json.dumps(report, indent=2))
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
