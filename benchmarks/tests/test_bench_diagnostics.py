@@ -5,6 +5,7 @@ import queue
 import unittest
 
 from benchmarks.run_all_with_baseline import score_run
+from benchmarks.compare_builds import percent_change, render
 from benchmarks.session_scaling_curve import _send_and_read
 
 
@@ -47,6 +48,27 @@ class BenchDiagnosticsTests(unittest.TestCase):
                                        "error": {"code": -32603, "message": "boom"}}))
         with self.assertRaisesRegex(RuntimeError, "MCP error"):
             _send_and_read(self.proc, self.request, self.responses, timeout_seconds=0.1)
+
+    def test_relative_benchmark_report_is_explicitly_informational(self):
+        cold = [{
+            "binary_size_bytes": 1_000_000,
+            "cold_start_ms_p50": 20,
+            "cold_start_ms_p99": 30,
+            "rss_idle_mb": 40,
+        }]
+        scaling = {
+            "update_memory_ms_p99": 1.0,
+            "compress_history_ms_p50": 2.0,
+            "compress_history_ms_p99": 5.0,
+        }
+        report = render(
+            {"cold": cold, "scaling": scaling},
+            {"cold": cold, "scaling": scaling},
+        )
+        self.assertIn("not a baseline reset", report)
+        self.assertIn("| Release binary |", report)
+        self.assertIn("+0.0%", report)
+        self.assertEqual(percent_change(100, 110), 10.0)
 
     def test_quick_mode_only_skips_explicit_slow_benchmark(self):
         outputs = {
