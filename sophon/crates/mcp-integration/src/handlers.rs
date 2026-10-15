@@ -157,11 +157,12 @@ fn authorize_path_with_root(
 }
 
 pub fn handle_tool_call(
-    server: &mut SophonServer,
+    server: &SophonServer,
     name: &str,
     arguments: Value,
 ) -> anyhow::Result<Value> {
-    match name {
+    anyhow::ensure!(!sophon_core::cancellation::is_cancelled(), "request cancelled");
+    let answer = match name {
         "compress_prompt" => {
             let args: CompressPromptArgs = serde_json::from_value(arguments)?;
 
@@ -171,8 +172,7 @@ pub fn handle_tool_call(
             // keyword hit (e.g. "loop" ≈ "iteration").
             let section_scores = compute_section_scores(server, &args.prompt, &args.query);
 
-            let parsed = server
-                .prompt_compressor
+            let parsed = server.prompt_compressor.lock().unwrap()
                 .compress_with_scores(
                     &args.prompt,
                     &args.query,
@@ -182,7 +182,7 @@ pub fn handle_tool_call(
                 )
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
-            server.stats.record(
+            server.stats.lock().unwrap().record(
                 "prompt_compressor",
                 count_tokens(&args.prompt),
                 parsed.token_count,
@@ -207,15 +207,14 @@ pub fn handle_tool_call(
                 .map(|m| Message::new(parse_role(&m.role), m.content))
                 .collect::<Vec<_>>();
 
-            let compressed = server.memory_manager.compress_with_overrides(
+            let compressed = server.memory_manager.lock().unwrap().compress_with_overrides(
                 &messages,
                 args.max_tokens,
                 args.recent_window,
             );
 
             let original_tokens: usize = messages.iter().map(|m| m.token_count).sum();
-            server
-                .stats
+            server.stats.lock().unwrap()
                 .record("memory_manager", original_tokens, compressed.token_count);
 
             // Optional retrieval pass: index incrementally, then look up the
@@ -228,9 +227,9 @@ pub fn handle_tool_call(
             // active AND a query is provided. Zero LLM calls at this
             // step — all the extraction work was done at update_memory.
             let graph_facts_value =
-                if let (Some(graph), Some(q)) = (server.graph_memory.as_ref(), query.as_deref()) {
+                if let (Some(graph), Some(q)) = (server.graph_memory.as_ref().map(|g| g.lock().unwrap()), query.as_deref()) {
                     let top_k = retrieval_top_k.unwrap_or(8);
-                    let hits = query_graph(graph, q, top_k);
+                    let hits = query_graph(&graph, q, top_k);
                     if hits.is_empty() {
                         None
                     } else {
@@ -321,7 +320,7 @@ pub fn handle_tool_call(
             let args: UpdateMemoryArgs = serde_json::from_value(arguments).unwrap_or_default();
 
             if args.reset {
-                server.memory_manager.reset();
+                server.memory_manager.lock().unwrap().reset();
             }
 
             let mut graph_ingest_summary: Option<Value> = None;
@@ -336,7 +335,7 @@ pub fn handle_tool_call(
                 // from the NEW batch before appending. One Haiku call
                 // per update_memory — the only LLM cost of the graph
                 // path; query time stays pure Rust.
-                if let Some(graph) = server.graph_memory.as_mut() {
+                if let Some(graph) = server.graph_memory.as_ref().map(|g| g.lock().unwrap()).as_mut() {
                     let chunk_id = format!("update-{}", Utc::now().timestamp_millis());
                     let now = Utc::now().to_rfc3339();
                     // Parallelised extraction via rayon — up to N×
@@ -354,14 +353,14 @@ pub fn handle_tool_call(
                     }));
                 }
 
-                server.memory_manager.append(new_msgs);
+                server.memory_manager.lock().unwrap().append(new_msgs);
             }
 
             let return_snapshot = args.return_snapshot.unwrap_or(true);
             if !return_snapshot {
                 let mut resp = json!({
                     "appended": true,
-                    "history_len": server.memory_manager.history_len(),
+                    "history_len": server.memory_manager.lock().unwrap().history_len(),
                 });
                 if let Some(g) = graph_ingest_summary.clone() {
                     resp["graph_ingest"] = g;
@@ -369,8 +368,8 @@ pub fn handle_tool_call(
                 return Ok(resp);
             }
 
-            let compressed = server.memory_manager.snapshot();
-            server.stats.record(
+            let compressed = server.memory_manager.lock().unwrap().snapshot();
+            server.stats.lock().unwrap().record(
                 "memory_manager",
                 compressed
                     .recent_messages
@@ -387,7 +386,7 @@ pub fn handle_tool_call(
                 "recent_messages": compressed.recent_messages,
                 "token_count": compressed.token_count,
                 "original_message_count": compressed.original_message_count,
-                "history_len": server.memory_manager.history_len(),
+                "history_len": server.memory_manager.lock().unwrap().history_len(),
             });
             if args.include_index {
                 value["index"] = serde_json::to_value(&compressed.index)?;
@@ -400,7 +399,7 @@ pub fn handle_tool_call(
         "read_file_delta" => {
             let args: ReadFileDeltaArgs = serde_json::from_value(arguments)?;
             let safe_path = authorize_path(std::path::Path::new(&args.path))?;
-            let response = server.delta_streamer.read_file_delta(
+            let response = server.delta_streamer.lock().unwrap().read_file_delta(
                 safe_path.clone(),
                 args.known_version,
                 args.known_hash.as_deref(),
@@ -410,8 +409,7 @@ pub fn handle_tool_call(
             // instead of re-reading the file (which races with external writes
             // and previously swallowed IO errors via `unwrap_or`).
             use delta_streamer::protocol::FileReadResponse;
-            let full_tokens = server
-                .delta_streamer
+            let full_tokens = server.delta_streamer.lock().unwrap()
                 .state_store()
                 .get(&safe_path)
                 .map(|s| s.token_count);
@@ -422,14 +420,14 @@ pub fn handle_tool_call(
                 }
                 FileReadResponse::Unchanged { .. } => (full_tokens.unwrap_or(0), 0),
             };
-            server.stats.record("delta_streamer", orig, compressed);
+            server.stats.lock().unwrap().record("delta_streamer", orig, compressed);
 
             Ok(serde_json::to_value(response)?)
         }
         "write_file_delta" => {
             let args: WriteFileDeltaArgs = serde_json::from_value(arguments)?;
             let safe_path = authorize_path(std::path::Path::new(&args.path))?;
-            let response = server.delta_streamer.write_file_delta(FileWriteRequest {
+            let response = server.delta_streamer.lock().unwrap().write_file_delta(FileWriteRequest {
                 path: safe_path,
                 changes: args.changes,
             })?;
@@ -438,11 +436,11 @@ pub fn handle_tool_call(
         "encode_fragments" => {
             let args: EncodeFragmentsArgs = serde_json::from_value(arguments)?;
             if let Some(auto) = args.auto_detect {
-                server.fragment_cache.config.auto_detect = auto;
+                server.fragment_cache.lock().unwrap().config.auto_detect = auto;
             }
 
-            let encoded = server.fragment_cache.encode(&args.content);
-            server.stats.record(
+            let encoded = server.fragment_cache.lock().unwrap().encode(&args.content);
+            server.stats.lock().unwrap().record(
                 "fragment_cache",
                 count_tokens(&args.content),
                 count_tokens(&encoded.content),
@@ -458,8 +456,7 @@ pub fn handle_tool_call(
         }
         "decode_fragments" => {
             let args: DecodeFragmentsArgs = serde_json::from_value(arguments)?;
-            let decoded = server
-                .fragment_cache
+            let decoded = server.fragment_cache.lock().unwrap()
                 .decode(&args.content)
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
             Ok(json!({ "content": decoded }))
@@ -474,7 +471,7 @@ pub fn handle_tool_call(
             let result = server
                 .output_compressor
                 .compress(&args.command, &args.output);
-            server.stats.record(
+            server.stats.lock().unwrap().record(
                 "output_compressor",
                 result.original_tokens,
                 result.compressed_tokens,
@@ -487,8 +484,7 @@ pub fn handle_tool_call(
             // Resolve the root: explicit arg > cached root.
             let root_to_scan = match args.root.as_deref() {
                 Some(p) => Some(authorize_path(std::path::Path::new(p))?),
-                None => server
-                    .codebase_navigator
+                None => server.codebase_navigator.lock().unwrap()
                     .root()
                     .map(|root| authorize_path(root.as_path()))
                     .transpose()?,
@@ -497,7 +493,7 @@ pub fn handle_tool_call(
             // `force_rescan` clears the incremental cache so the next
             // `scan` call always runs a full Fresh scan.
             if args.force_rescan {
-                server.codebase_navigator.reset();
+                server.codebase_navigator.lock().unwrap().reset();
             }
 
             // We always call `scan` now — Navigator::scan is naturally
@@ -509,8 +505,7 @@ pub fn handle_tool_call(
             let root = root_to_scan.ok_or_else(|| {
                 anyhow::anyhow!("navigate_codebase: no root provided and no cached scan available")
             })?;
-            let scan_result = server
-                .codebase_navigator
+            let scan_result = server.codebase_navigator.lock().unwrap()
                 .scan(&root)
                 .map_err(|e| anyhow::anyhow!("scan failed: {}", e))?;
 
@@ -518,21 +513,18 @@ pub fn handle_tool_call(
             if let Some(max) = args.max_tokens {
                 dcfg.max_tokens = max;
             }
-            let digest = server
-                .codebase_navigator
+            let digest = server.codebase_navigator.lock().unwrap()
                 .digest(args.query.as_deref(), &dcfg);
 
             // Crudely estimate "original" tokens as the sum of byte
             // sizes / 4 (~1 token per 4 bytes) so get_token_stats has
             // something meaningful to compare against.
-            let original_estimate: usize = server
-                .codebase_navigator
+            let original_estimate: usize = server.codebase_navigator.lock().unwrap()
                 .records()
                 .iter()
                 .map(|r| (r.byte_size as usize) / 4)
                 .sum();
-            server
-                .stats
+            server.stats.lock().unwrap()
                 .record("codebase_navigator", original_estimate, digest.total_tokens);
 
             // Merge the digest payload with the scan diagnostics so the
@@ -549,8 +541,8 @@ pub fn handle_tool_call(
         "get_token_stats" => {
             let args: StatsArgs = serde_json::from_value(arguments)?;
             let period = args.period.unwrap_or_else(|| "session".to_string());
-            let modules = server.stats.snapshot();
-            let totals = server.stats.totals();
+            let modules = server.stats.lock().unwrap().snapshot();
+            let totals = server.stats.lock().unwrap().totals();
             // compressed / original, clamped to [0.0, 1.0]. Lower is better.
             let ratio = if totals.original_tokens == 0 {
                 1.0
@@ -565,7 +557,9 @@ pub fn handle_tool_call(
             }))
         }
         _ => Err(anyhow::anyhow!("unknown tool: {}", name)),
-    }
+    }?;
+    anyhow::ensure!(!sophon_core::cancellation::is_cancelled(), "request cancelled");
+    Ok(answer)
 }
 
 /// Compute per-section semantic similarity scores using the embedder
@@ -580,11 +574,11 @@ fn compute_section_scores(
     prompt: &str,
     query: &str,
 ) -> Option<HashMap<String, f32>> {
-    let retriever = server.retriever.as_ref()?;
+    let retriever = server.retriever.as_ref()?.lock().unwrap();
     let embedder = retriever.embedder();
 
     // Quick parse to get section IDs + content
-    let parsed = server.prompt_compressor.parse(prompt).ok()?;
+    let parsed = server.prompt_compressor.lock().unwrap().parse(prompt).ok()?;
     if parsed.sections.is_empty() {
         return None;
     }
@@ -625,7 +619,7 @@ fn parse_role(role: &str) -> Role {
 /// top-k retrieval against `query`. Returns the JSON value to merge into
 /// the `compress_history` response, or `None` if retrieval was a no-op.
 fn run_retrieval(
-    server: &mut crate::server::SophonServer,
+    server: &crate::server::SophonServer,
     messages: &[Message],
     query: Option<&str>,
     top_k_override: Option<usize>,
@@ -633,12 +627,13 @@ fn run_retrieval(
     let Some(query) = query else {
         return Ok(None);
     };
-    let Some(retriever) = server.retriever.as_mut() else {
+    let Some(retriever) = server.retriever.as_ref() else {
         return Ok(None);
     };
     if query.trim().is_empty() {
         return Ok(None);
     }
+    let mut retriever = retriever.lock().unwrap();
 
     // Convert memory_manager::Message to the chunker's input shape.
     // The chunker wants &str references with a parallel timestamp; we keep
@@ -916,7 +911,7 @@ fn run_retrieval(
         (trimmed, total_searched, t0.elapsed().as_millis() as u64);
 
     let total_retrieved_tokens: usize = chunks_out.iter().map(|c| c.chunk.token_count).sum();
-    server.stats.record(
+    server.stats.lock().unwrap().record(
         "semantic_retriever",
         count_tokens(query),
         total_retrieved_tokens,
