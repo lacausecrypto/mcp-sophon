@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{config::SophonConfig, handlers::handle_tool_call, tools::get_tool_definitions};
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug)]
 pub struct SophonServer {
@@ -215,6 +216,14 @@ impl SophonServer {
     /// long ops (`compress_history`, `retrieve`, …) are deferred to
     /// v0.5.5.
     pub fn handle_json_rpc_message(&mut self, message: &Value) -> anyhow::Result<Option<Value>> {
+        self.handle_json_rpc_message_with_cancel(message, None)
+    }
+
+    fn handle_json_rpc_message_with_cancel(
+        &mut self,
+        message: &Value,
+        cancellation: Option<&CancellationToken>,
+    ) -> anyhow::Result<Option<Value>> {
         use crate::jsonrpc::{
             classify_anyhow, error_response, INVALID_PARAMS, METHOD_NOT_FOUND,
             SOPHON_TOOL_NOT_FOUND,
@@ -325,7 +334,7 @@ impl SophonServer {
                     .cloned()
                     .unwrap_or(Value::Object(Default::default()));
 
-                match self.handle_tool_call(name, arguments) {
+                match crate::handlers::handle_tool_call_with_cancel(self, name, arguments, cancellation) {
                     Ok(result) => {
                         let result_text =
                             serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
@@ -410,17 +419,18 @@ impl SophonServer {
         use crate::jsonrpc::{error_response, PARSE_ERROR};
         use std::sync::Arc;
         use tokio::io::{self, AsyncBufReadExt, BufReader};
-        use tokio::sync::Mutex;
-        use tokio_util::sync::CancellationToken;
+        use tokio::sync::{Mutex, Semaphore};
 
-        // Shared state under tokio::sync::Mutex so the server can be
-        // borrowed by both the inline path (initialize, ping,
-        // tools/list, notifications/cancelled) and the spawned tool
-        // tasks. Tools acquire the lock just for the duration of their
-        // sync `handle_tool_call` body — readers and other inline
-        // requests are blocked while a tool runs (intentional for now;
-        // v0.5.5 will split RO/RW dispatch to allow concurrent reads).
+        // Stateless computations use a snapshot; stateful mutations remain
+        // serialized to preserve their existing transaction boundaries.
+        let independent_output = Arc::new(self.output_compressor.clone());
         let server = Arc::new(Mutex::new(self));
+        let max_active = std::env::var("SOPHON_MAX_CONCURRENT_TOOLS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&v| (1..=64).contains(&v))
+            .unwrap_or(8);
+        let slots = Arc::new(Semaphore::new(max_active));
 
         // Cancellation registry: maps an in-flight tools/call request_id
         // to its CancellationToken. notifications/cancelled looks up by
@@ -469,71 +479,123 @@ impl SophonServer {
                 let id = parsed.get("id").cloned().unwrap_or(Value::Null);
                 let id_key = canonical_id_key(&id);
                 let token = CancellationToken::new();
-                pending.lock().await.insert(id_key.clone(), token.clone());
+                {
+                    let mut requests = pending.lock().await;
+                    if requests.contains_key(&id_key) {
+                        drop(requests);
+                        write_response(
+                            &out,
+                            &error_response(
+                                id,
+                                crate::jsonrpc::INVALID_REQUEST,
+                                "duplicate in-flight request id".to_string(),
+                            ),
+                        )
+                        .await?;
+                        continue;
+                    }
+                    requests.insert(id_key.clone(), token.clone());
+                }
 
                 let server_for_task = Arc::clone(&server);
                 let pending_for_task = Arc::clone(&pending);
                 let out_for_task = Arc::clone(&out);
-                let parsed_for_task = parsed.clone();
+                let slots_for_task = Arc::clone(&slots);
+                let output_for_task = Arc::clone(&independent_output);
 
                 tool_tasks.spawn(async move {
-                    let work = {
-                        let server = Arc::clone(&server_for_task);
-                        let parsed = parsed_for_task.clone();
-                        tokio::task::spawn_blocking(move || {
-                            // blocking_lock is OK inside spawn_blocking —
-                            // we're on a dedicated blocking-IO thread,
-                            // not on a runtime worker.
-                            let mut srv = server.blocking_lock();
-                            srv.handle_json_rpc_message(&parsed)
-                        })
-                    };
-
-                    let resp_opt: Option<Value> = tokio::select! {
+                    // Cancel queued work before acquiring a blocking worker.
+                    let permit = tokio::select! {
                         biased;
-                        // Cancellation wins ties so a fast-arriving cancel
-                        // for a fast-completing tool is still honoured.
                         _ = token.cancelled() => {
-                            tracing::debug!(
-                                request_id = %id,
-                                "tools/call cancelled before completion — response dropped"
-                            );
+                            pending_for_task.lock().await.remove(&id_key);
+                            return;
+                        }
+                        acquired = slots_for_task.acquire_owned() => match acquired {
+                            Ok(permit) => permit,
+                            Err(_) => {
+                                pending_for_task.lock().await.remove(&id_key);
+                                return;
+                            }
+                        }
+                    };
+                    if token.is_cancelled() {
+                        pending_for_task.lock().await.remove(&id_key);
+                        return;
+                    }
+
+                    let worker_token = token.clone();
+                    let worker_server = Arc::clone(&server_for_task);
+                    let mut work = tokio::task::spawn_blocking(move || {
+                        if worker_token.is_cancelled() {
+                            return Ok((None, None));
+                        }
+                        if let Some((response, stats)) =
+                            independent_rpc_response(&parsed, &output_for_task)
+                        {
+                            return Ok((Some(response), stats));
+                        }
+                        // Stateful calls retain serialization, while independent
+                        // tools avoid waiting for their computation.
+                        let mut srv = worker_server.blocking_lock();
+                        srv.handle_json_rpc_message_with_cancel(&parsed, Some(&worker_token))
+                            .map(|response| (response, None))
+                    });
+
+                    // A cancelled blocking worker must terminate before its
+                    // permit is released. Never detach potentially mutating work.
+                    let completed = tokio::select! {
+                        biased;
+                        _ = token.cancelled() => {
+                            let _ = (&mut work).await;
                             None
                         }
-                        result = work => match result {
-                            Ok(Ok(opt)) => opt,
-                            Ok(Err(e)) => {
-                                tracing::warn!(
-                                    request_id = %id,
-                                    error = %e,
-                                    "tools/call dispatcher returned Err — surfacing as JSON-RPC error"
-                                );
+                        result = &mut work => Some(result),
+                    };
+                    drop(permit);
+
+                    let (response, stats) = match completed {
+                        Some(Ok(Ok(value))) => value,
+                        Some(Ok(Err(err))) => {
+                            tracing::warn!(request_id = %id, error = %err, "tool failed");
+                            (
                                 Some(error_response(
                                     id.clone(),
                                     crate::jsonrpc::INTERNAL_ERROR,
-                                    format!("internal error: {}", e),
-                                ))
-                            }
-                            Err(join_err) => {
-                                tracing::error!(
-                                    request_id = %id,
-                                    error = %join_err,
-                                    "tools/call task panicked"
-                                );
+                                    format!("internal error: {err}"),
+                                )),
+                                None,
+                            )
+                        }
+                        Some(Err(err)) => {
+                            tracing::error!(request_id = %id, error = %err, "tool worker panicked");
+                            (
                                 Some(error_response(
                                     id.clone(),
                                     crate::jsonrpc::INTERNAL_ERROR,
                                     "internal error: tool task panicked".to_string(),
-                                ))
-                            }
+                                )),
+                                None,
+                            )
                         }
+                        None => (None, None),
                     };
 
+                    // Commit stats without modifying the result; the stateful
+                    // dispatcher is still the sole owner of mutable statistics.
+                    if let Some((original, compressed)) = stats {
+                        server_for_task.lock().await.stats.record(
+                            "output_compressor",
+                            original,
+                            compressed,
+                        );
+                    }
                     pending_for_task.lock().await.remove(&id_key);
-
-                    if let Some(response) = resp_opt {
-                        if let Err(e) = write_response(&out_for_task, &response).await {
-                            tracing::error!(error = %e, "failed to write tool response");
+                    if !token.is_cancelled() {
+                        if let Some(response) = response {
+                            if let Err(err) = write_response(&out_for_task, &response).await {
+                                tracing::error!(error = %err, "failed to write tool response");
+                            }
                         }
                     }
                 });
@@ -568,8 +630,10 @@ impl SophonServer {
                 continue;
             }
 
-            // Default inline dispatch.
-            let response_opt = {
+            // Control-plane messages do not wait on mutable tool state.
+            let response_opt = if let Some(response) = control_rpc_response(&parsed) {
+                response
+            } else {
                 let mut srv = server.lock().await;
                 srv.handle_json_rpc_message(&parsed)?
             };
@@ -589,6 +653,85 @@ impl SophonServer {
         }
 
         Ok(())
+    }
+}
+
+/// A pure tool's CPU work can run without locking mutable server state.
+fn independent_rpc_response(
+    message: &Value,
+    output: &OutputCompressor,
+) -> Option<(Value, Option<(usize, usize)>)> {
+    let name = message.pointer("/params/name")?.as_str()?;
+    let arguments = message
+        .pointer("/params/arguments")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let result = crate::handlers::independent_tool_call(name, arguments, output)?;
+    let id = message.get("id").cloned().unwrap_or(Value::Null);
+    Some(match result {
+        Ok((value, stats)) => {
+            let text = serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string());
+            (
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [{"type": "text", "text": text}],
+                        "structuredContent": value,
+                        "isError": false
+                    }
+                }),
+                stats,
+            )
+        }
+        Err(err) => {
+            let code = crate::jsonrpc::classify_anyhow(&err);
+            let text = err.to_string();
+            (
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [{"type": "text", "text": &text}],
+                        "structuredContent": {
+                            "error": {"code": code, "message": &text}
+                        },
+                        "isError": true
+                    }
+                }),
+                None,
+            )
+        }
+    })
+}
+
+/// Cheap control requests are safe while a stateful tool is executing.
+fn control_rpc_response(message: &Value) -> Option<Option<Value>> {
+    let id = message.get("id").cloned().unwrap_or(Value::Null);
+    match message.get("method")?.as_str()? {
+        "initialize" => Some(Some(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {"tools": {"listChanged": false}, "logging": {}},
+                "serverInfo": {"name": "sophon", "version": env!("CARGO_PKG_VERSION")}
+            }
+        }))),
+        "notifications/initialized" => Some(None),
+        "ping" => Some(Some(json!({"jsonrpc": "2.0", "id": id, "result": {}}))),
+        "tools/list" => Some(Some(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "tools": get_tool_definitions().into_iter().map(|tool| json!({
+                    "name": tool.name,
+                    "description": tool.description,
+                    "inputSchema": tool.input_schema,
+                })).collect::<Vec<_>>()
+            }
+        }))),
+        _ => None,
     }
 }
 
