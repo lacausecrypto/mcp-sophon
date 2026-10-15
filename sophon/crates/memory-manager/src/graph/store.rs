@@ -84,7 +84,7 @@ impl GraphStore {
             fs::create_dir_all(parent)?;
         }
         let json = serde_json::to_string_pretty(&self.snapshot)?;
-        fs::write(path, json)?;
+        sophon_core::atomic_file::replace(path, json.as_bytes())?;
         Ok(())
     }
 
