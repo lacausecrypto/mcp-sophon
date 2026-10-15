@@ -218,18 +218,93 @@ pub(crate) fn handle_tool_call_with_cancel(
 ) -> anyhow::Result<Value> {
     check_cancel(cancellation)?;
     match name {
-        "compress_prompt" => {
+        "compress_prompt" => run_prompt_tool(
+            &mut server.prompt_compressor,
+            &server.retriever,
+            &server.stats,
+            arguments,
+            cancellation,
+        ),
+        "compress_history" => run_history_tool(
+            &server.memory_manager,
+            &mut server.retriever,
+            &server.graph_memory,
+            &server.stats,
+            arguments,
+            cancellation,
+        ),
+        "update_memory" => run_update_memory_tool(
+            &mut server.memory_manager,
+            &mut server.graph_memory,
+            &server.stats,
+            arguments,
+            cancellation,
+        ),
+        "read_file_delta" | "write_file_delta" => run_delta_tool(
+            &mut server.delta_streamer,
+            &server.stats,
+            name,
+            arguments,
+            cancellation,
+        ),
+        "encode_fragments" | "decode_fragments" => run_fragment_tool(
+            &mut server.fragment_cache,
+            &server.stats,
+            name,
+            arguments,
+            cancellation,
+        ),
+        "count_tokens" => {
+            let args: CountTokensArgs = serde_json::from_value(arguments)?;
+            let n = count_tokens(&args.text);
+            Ok(json!({"token_count": n, "char_count": args.text.chars().count()}))
+        }
+        "compress_output" => {
+            let args: CompressOutputArgs = serde_json::from_value(arguments)?;
+            let result = server
+                .output_compressor
+                .compress(&args.command, &args.output);
+            server.stats.record(
+                "output_compressor",
+                result.original_tokens,
+                result.compressed_tokens,
+            );
+            Ok(serde_json::to_value(result)?)
+        }
+        "navigate_codebase" => {
+            let (value, original, compressed) =
+                run_navigate_codebase(&mut server.codebase_navigator, arguments, cancellation)?;
+            server
+                .stats
+                .record("codebase_navigator", original, compressed);
+            Ok(value)
+        }
+        "get_token_stats" => get_token_stats_value(&server.stats, arguments),
+        _ => Err(anyhow::anyhow!("unknown tool: {}", name)),
+    }
+}
+
+/// Module-local handlers serve both synchronous and stdio dispatch.
+/// Memory and graph form one consistency boundary; the retriever keeps its
+/// own state and is explicitly passed into history/prompt operations.
+pub(crate) fn run_prompt_tool(
+    compressor: &mut prompt_compressor::PromptCompressor,
+    retriever: &Option<semantic_retriever::Retriever>,
+    stats: &StatsCollector,
+    arguments: Value,
+    cancellation: Option<&CancellationToken>,
+) -> anyhow::Result<Value> {
+    check_cancel(cancellation)?;
             let args: CompressPromptArgs = serde_json::from_value(arguments)?;
 
             // When a semantic embedder is available (via the retriever),
             // compute per-section cosine similarity scores so the compressor
             // can include sections that match semantically even without a
             // keyword hit (e.g. "loop" ≈ "iteration").
-            let section_scores = compute_section_scores(server, &args.prompt, &args.query);
+            let section_scores = compute_section_scores(compressor, retriever, &args.prompt, &args.query);
 
             check_cancel(cancellation)?;
-            let parsed = server
-                .prompt_compressor
+            let parsed = compressor
                 .compress_with_scores(
                     &args.prompt,
                     &args.query,
@@ -240,7 +315,7 @@ pub(crate) fn handle_tool_call_with_cancel(
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             check_cancel(cancellation)?;
-            server.stats.record(
+            stats.record(
                 "prompt_compressor",
                 count_tokens(&args.prompt),
                 parsed.token_count,
@@ -253,8 +328,17 @@ pub(crate) fn handle_tool_call_with_cancel(
                 "excluded_sections": parsed.excluded_sections,
                 "compression_ratio": parsed.compression_ratio,
             }))
-        }
-        "compress_history" => {
+}
+
+pub(crate) fn run_history_tool(
+    memory: &memory_manager::MemoryManager,
+    retriever: &mut Option<semantic_retriever::Retriever>,
+    graph: &Option<memory_manager::graph::GraphStore>,
+    stats: &StatsCollector,
+    arguments: Value,
+    cancellation: Option<&CancellationToken>,
+) -> anyhow::Result<Value> {
+    check_cancel(cancellation)?;
             let args: CompressHistoryArgs = serde_json::from_value(arguments)?;
             let query = args.query.clone();
             let retrieval_top_k = args.retrieval_top_k;
@@ -265,7 +349,7 @@ pub(crate) fn handle_tool_call_with_cancel(
                 .map(|m| Message::new(parse_role(&m.role), m.content))
                 .collect::<Vec<_>>();
 
-            let compressed = server.memory_manager.compress_with_overrides(
+            let compressed = memory.compress_with_overrides(
                 &messages,
                 args.max_tokens,
                 args.recent_window,
@@ -273,15 +357,15 @@ pub(crate) fn handle_tool_call_with_cancel(
 
             check_cancel(cancellation)?;
             let original_tokens: usize = messages.iter().map(|m| m.token_count).sum();
-            server
-                .stats
+            stats
                 .record("memory_manager", original_tokens, compressed.token_count);
 
             // Optional retrieval pass: index incrementally, then look up the
             // top-k chunks for the query. No-op if the retriever is off or
             // the caller didn't pass a query.
             let retrieval_value = run_retrieval(
-                server,
+                retriever,
+                stats,
                 &messages,
                 query.as_deref(),
                 retrieval_top_k,
@@ -292,7 +376,7 @@ pub(crate) fn handle_tool_call_with_cancel(
             // active AND a query is provided. Zero LLM calls at this
             // step — all the extraction work was done at update_memory.
             let graph_facts_value =
-                if let (Some(graph), Some(q)) = (server.graph_memory.as_ref(), query.as_deref()) {
+                if let (Some(graph), Some(q)) = (graph.as_ref(), query.as_deref()) {
                     let top_k = retrieval_top_k.unwrap_or(8);
                     let hits = query_graph(graph, q, top_k);
                     if hits.is_empty() {
@@ -382,12 +466,20 @@ pub(crate) fn handle_tool_call_with_cancel(
                 value["graph_facts"] = gf;
             }
             Ok(value)
-        }
-        "update_memory" => {
+}
+
+pub(crate) fn run_update_memory_tool(
+    memory: &mut memory_manager::MemoryManager,
+    graph: &mut Option<memory_manager::graph::GraphStore>,
+    stats: &StatsCollector,
+    arguments: Value,
+    cancellation: Option<&CancellationToken>,
+) -> anyhow::Result<Value> {
+    check_cancel(cancellation)?;
             let args: UpdateMemoryArgs = serde_json::from_value(arguments).unwrap_or_default();
 
             if args.reset {
-                server.memory_manager.reset();
+                memory.reset();
             }
 
             let mut graph_ingest_summary: Option<Value> = None;
@@ -402,7 +494,7 @@ pub(crate) fn handle_tool_call_with_cancel(
                 // from the NEW batch before appending. One Haiku call
                 // per update_memory — the only LLM cost of the graph
                 // path; query time stays pure Rust.
-                if let Some(graph) = server.graph_memory.as_mut() {
+                if let Some(graph) = graph.as_mut() {
                     let chunk_id = format!("update-{}", Utc::now().timestamp_millis());
                     let now = Utc::now().to_rfc3339();
                     // Parallelised extraction via rayon — up to N×
@@ -420,14 +512,14 @@ pub(crate) fn handle_tool_call_with_cancel(
                     }));
                 }
 
-                server.memory_manager.append(new_msgs);
+                memory.append(new_msgs);
             }
 
             let return_snapshot = args.return_snapshot.unwrap_or(true);
             if !return_snapshot {
                 let mut resp = json!({
                     "appended": true,
-                    "history_len": server.memory_manager.history_len(),
+                    "history_len": memory.history_len(),
                 });
                 if let Some(g) = graph_ingest_summary.clone() {
                     resp["graph_ingest"] = g;
@@ -435,8 +527,8 @@ pub(crate) fn handle_tool_call_with_cancel(
                 return Ok(resp);
             }
 
-            let compressed = server.memory_manager.snapshot();
-            server.stats.record(
+            let compressed = memory.snapshot();
+            stats.record(
                 "memory_manager",
                 compressed
                     .recent_messages
@@ -453,7 +545,7 @@ pub(crate) fn handle_tool_call_with_cancel(
                 "recent_messages": compressed.recent_messages,
                 "token_count": compressed.token_count,
                 "original_message_count": compressed.original_message_count,
-                "history_len": server.memory_manager.history_len(),
+                "history_len": memory.history_len(),
             });
             if args.include_index {
                 value["index"] = serde_json::to_value(&compressed.index)?;
@@ -462,49 +554,6 @@ pub(crate) fn handle_tool_call_with_cancel(
                 value["graph_ingest"] = g;
             }
             Ok(value)
-        }
-        "read_file_delta" | "write_file_delta" => run_delta_tool(
-            &mut server.delta_streamer,
-            &server.stats,
-            name,
-            arguments,
-            cancellation,
-        ),
-        "encode_fragments" | "decode_fragments" => run_fragment_tool(
-            &mut server.fragment_cache,
-            &server.stats,
-            name,
-            arguments,
-            cancellation,
-        ),
-        "count_tokens" => {
-            let args: CountTokensArgs = serde_json::from_value(arguments)?;
-            let n = count_tokens(&args.text);
-            Ok(json!({"token_count": n, "char_count": args.text.chars().count()}))
-        }
-        "compress_output" => {
-            let args: CompressOutputArgs = serde_json::from_value(arguments)?;
-            let result = server
-                .output_compressor
-                .compress(&args.command, &args.output);
-            server.stats.record(
-                "output_compressor",
-                result.original_tokens,
-                result.compressed_tokens,
-            );
-            Ok(serde_json::to_value(result)?)
-        }
-        "navigate_codebase" => {
-            let (value, original, compressed) =
-                run_navigate_codebase(&mut server.codebase_navigator, arguments, cancellation)?;
-            server
-                .stats
-                .record("codebase_navigator", original, compressed);
-            Ok(value)
-        }
-        "get_token_stats" => get_token_stats_value(&server.stats, arguments),
-        _ => Err(anyhow::anyhow!("unknown tool: {}", name)),
-    }
 }
 
 /// One delta-streamer transaction: the file state store and the filesystem
@@ -703,15 +752,16 @@ fn get_token_stats_value(stats: &StatsCollector, arguments: Value) -> anyhow::Re
 /// Returns `None` if no retriever/embedder is available, keeping the
 /// fallback to keyword-only scoring.
 fn compute_section_scores(
-    server: &SophonServer,
+    compressor: &prompt_compressor::PromptCompressor,
+    retriever: &Option<semantic_retriever::Retriever>,
     prompt: &str,
     query: &str,
 ) -> Option<HashMap<String, f32>> {
-    let retriever = server.retriever.as_ref()?;
+    let retriever = retriever.as_ref()?;
     let embedder = retriever.embedder();
 
     // Quick parse to get section IDs + content
-    let parsed = server.prompt_compressor.parse(prompt).ok()?;
+    let parsed = compressor.parse(prompt).ok()?;
     if parsed.sections.is_empty() {
         return None;
     }
@@ -752,7 +802,8 @@ fn parse_role(role: &str) -> Role {
 /// top-k retrieval against `query`. Returns the JSON value to merge into
 /// the `compress_history` response, or `None` if retrieval was a no-op.
 fn run_retrieval(
-    server: &mut crate::server::SophonServer,
+    retriever: &mut Option<semantic_retriever::Retriever>,
+    stats: &StatsCollector,
     messages: &[Message],
     query: Option<&str>,
     top_k_override: Option<usize>,
@@ -761,7 +812,7 @@ fn run_retrieval(
     let Some(query) = query else {
         return Ok(None);
     };
-    let Some(retriever) = server.retriever.as_mut() else {
+    let Some(retriever) = retriever.as_mut() else {
         return Ok(None);
     };
     if query.trim().is_empty() {
@@ -1049,7 +1100,7 @@ fn run_retrieval(
         (trimmed, total_searched, t0.elapsed().as_millis() as u64);
 
     let total_retrieved_tokens: usize = chunks_out.iter().map(|c| c.chunk.token_count).sum();
-    server.stats.record(
+    stats.record(
         "semantic_retriever",
         count_tokens(query),
         total_retrieved_tokens,
