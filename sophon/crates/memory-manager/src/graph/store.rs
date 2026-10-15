@@ -379,6 +379,28 @@ mod tests {
     }
 
     #[test]
+    fn failed_graph_snapshot_replace_preserves_last_valid_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("graph.json");
+        let backup = dir.path().join("saved.json");
+        let mut graph = GraphStore::open(&path).unwrap();
+        graph.upsert_entity(mk_entity("Alice"));
+        graph.save().unwrap();
+        let committed = fs::read(&path).unwrap();
+
+        fs::rename(&path, &backup).unwrap();
+        fs::create_dir(&path).unwrap();
+        graph.upsert_entity(mk_entity("Bob"));
+        assert!(graph.save().is_err());
+        fs::remove_dir(&path).unwrap();
+        fs::rename(&backup, &path).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), committed);
+        let resumed = GraphStore::open(&path).unwrap();
+        assert_eq!(resumed.entity_count(), 1);
+        assert!(resumed.get_entity(&EntityId::from_name("Bob")).is_none());
+    }
+
+    #[test]
     fn open_missing_file_yields_empty_store() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("does-not-exist.json");
