@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::sync::Mutex as StateMutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use codebase_navigator::{Navigator, NavigatorConfig};
 use delta_streamer::DeltaStreamer;
@@ -15,21 +17,21 @@ use crate::{config::SophonConfig, handlers::handle_tool_call, tools::get_tool_de
 
 #[derive(Debug)]
 pub struct SophonServer {
-    pub prompt_compressor: PromptCompressor,
-    pub memory_manager: MemoryManager,
-    pub delta_streamer: DeltaStreamer,
-    pub fragment_cache: FragmentCache,
+    pub prompt_compressor: StateMutex<PromptCompressor>,
+    pub memory_manager: StateMutex<MemoryManager>,
+    pub delta_streamer: StateMutex<DeltaStreamer>,
+    pub fragment_cache: StateMutex<FragmentCache>,
     /// Always-on output compressor. Stateless; no persistence; no
     /// external deps. Exposed via the `compress_output` MCP tool.
     pub output_compressor: OutputCompressor,
     /// Always-on codebase navigator. Stateful cache of the last
     /// scanned repo lives inside. Exposed via `navigate_codebase`.
-    pub codebase_navigator: Navigator,
+    pub codebase_navigator: StateMutex<Navigator>,
     /// Optional semantic retriever. Activated only when the
     /// `SOPHON_RETRIEVER_PATH` environment variable points at a directory
     /// where the JSONL chunk store should live. Default off so existing
     /// `compress_history` callers see no behaviour change.
-    pub retriever: Option<Retriever>,
+    pub retriever: Option<StateMutex<Retriever>>,
     /// Optional graph memory (Path A architecture). Activated by
     /// `SOPHON_GRAPH_MEMORY=1`. When present, `update_memory` extracts
     /// triples from new messages at ingestion time, and
@@ -37,8 +39,8 @@ pub struct SophonServer {
     /// query time (pure Rust, zero LLM calls per query).
     /// `SOPHON_GRAPH_MEMORY_PATH` selects the JSON snapshot location
     /// for persistence across restarts.
-    pub graph_memory: Option<GraphStore>,
-    pub stats: StatsCollector,
+    pub graph_memory: Option<StateMutex<GraphStore>>,
+    pub stats: StateMutex<StatsCollector>,
 }
 
 impl Default for SophonServer {
@@ -182,19 +184,19 @@ impl SophonServer {
         };
 
         Self {
-            prompt_compressor: PromptCompressor::with_config(cfg.prompt),
-            memory_manager,
-            delta_streamer: DeltaStreamer::new(cfg.delta.max_files),
-            fragment_cache: FragmentCache::with_config(cfg.fragment),
+            prompt_compressor: StateMutex::new(PromptCompressor::with_config(cfg.prompt)),
+            memory_manager: StateMutex::new(memory_manager),
+            delta_streamer: StateMutex::new(DeltaStreamer::new(cfg.delta.max_files)),
+            fragment_cache: StateMutex::new(FragmentCache::with_config(cfg.fragment)),
             output_compressor: OutputCompressor::default(),
-            codebase_navigator: Navigator::new(NavigatorConfig::default()),
-            retriever,
-            graph_memory,
-            stats: StatsCollector::default(),
+            codebase_navigator: StateMutex::new(Navigator::new(NavigatorConfig::default())),
+            retriever: retriever.map(StateMutex::new),
+            graph_memory: graph_memory.map(StateMutex::new),
+            stats: StateMutex::new(StatsCollector::default()),
         }
     }
 
-    pub fn handle_tool_call(&mut self, name: &str, arguments: Value) -> anyhow::Result<Value> {
+    pub fn handle_tool_call(&self, name: &str, arguments: Value) -> anyhow::Result<Value> {
         handle_tool_call(self, name, arguments)
     }
 
@@ -214,7 +216,7 @@ impl SophonServer {
     /// interrupted mid-flight — cooperative interrupt hooks for the
     /// long ops (`compress_history`, `retrieve`, …) are deferred to
     /// v0.5.5.
-    pub fn handle_json_rpc_message(&mut self, message: &Value) -> anyhow::Result<Option<Value>> {
+    pub fn handle_json_rpc_message(&self, message: &Value) -> anyhow::Result<Option<Value>> {
         use crate::jsonrpc::{
             classify_anyhow, error_response, INVALID_PARAMS, METHOD_NOT_FOUND,
             SOPHON_TOOL_NOT_FOUND,
@@ -410,7 +412,7 @@ impl SophonServer {
         use crate::jsonrpc::{error_response, PARSE_ERROR};
         use std::sync::Arc;
         use tokio::io::{self, AsyncBufReadExt, BufReader};
-        use tokio::sync::Mutex;
+        use tokio::sync::{Mutex, Semaphore};
         use tokio_util::sync::CancellationToken;
 
         // Shared state under tokio::sync::Mutex so the server can be
@@ -420,13 +422,19 @@ impl SophonServer {
         // sync `handle_tool_call` body — readers and other inline
         // requests are blocked while a tool runs (intentional for now;
         // v0.5.5 will split RO/RW dispatch to allow concurrent reads).
-        let server = Arc::new(Mutex::new(self));
+        let server = Arc::new(self);
+        // Bound the number of active blocking tool workers (waiting requests
+        // do not consume blocking threads). Cancellation still works while queued.
+        let max_concurrent = std::env::var("SOPHON_MAX_CONCURRENT_TOOLS")
+            .ok().and_then(|s| s.parse::<usize>().ok())
+            .filter(|n| (1..=64).contains(n)).unwrap_or(8);
+        let semaphore = Arc::new(Semaphore::new(max_concurrent));
 
         // Cancellation registry: maps an in-flight tools/call request_id
         // to its CancellationToken. notifications/cancelled looks up by
         // id and triggers cancel; the spawned task removes itself when
         // it finishes (or is cancelled).
-        let pending: Arc<Mutex<HashMap<String, CancellationToken>>> =
+        let pending: Arc<Mutex<HashMap<String, (CancellationToken, Arc<AtomicBool>)>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
         // Stdout is shared across spawned tool tasks. Wrap in a Mutex
@@ -469,38 +477,54 @@ impl SophonServer {
                 let id = parsed.get("id").cloned().unwrap_or(Value::Null);
                 let id_key = canonical_id_key(&id);
                 let token = CancellationToken::new();
-                pending.lock().await.insert(id_key.clone(), token.clone());
+                let stopped = Arc::new(AtomicBool::new(false));
+                // Avoid losing cancellation ownership when clients reuse an ID.
+                {
+                    let mut map = pending.lock().await;
+                    if map.contains_key(&id_key) {
+                        let error = error_response(id, crate::jsonrpc::INVALID_REQUEST,
+                            "duplicate in-flight request id".to_string());
+                        drop(map);
+                        write_response(&out, &error).await?;
+                        continue;
+                    }
+                    map.insert(id_key.clone(), (token.clone(), Arc::clone(&stopped)));
+                }
 
                 let server_for_task = Arc::clone(&server);
                 let pending_for_task = Arc::clone(&pending);
                 let out_for_task = Arc::clone(&out);
-                let parsed_for_task = parsed.clone();
+                let parsed_for_task = parsed;
+                let semaphore_for_task = Arc::clone(&semaphore);
 
                 tool_tasks.spawn(async move {
+                    let _permit = tokio::select! {
+                        biased;
+                        _ = token.cancelled() => {
+                            pending_for_task.lock().await.remove(&id_key);
+                            return;
+                        }
+                        permit = semaphore_for_task.acquire_owned() => match permit {
+                            Ok(p) => p,
+                            Err(_) => return,
+                        },
+                    };
                     let work = {
                         let server = Arc::clone(&server_for_task);
-                        let parsed = parsed_for_task.clone();
+                        let parsed = parsed_for_task; 
+                        let stop = Arc::clone(&stopped);
                         tokio::task::spawn_blocking(move || {
-                            // blocking_lock is OK inside spawn_blocking —
-                            // we're on a dedicated blocking-IO thread,
-                            // not on a runtime worker.
-                            let mut srv = server.blocking_lock();
-                            srv.handle_json_rpc_message(&parsed)
+                            let _scope = sophon_core::cancellation::enter(stop);
+                            if sophon_core::cancellation::is_cancelled() {
+                                return Ok(None);
+                            }
+                            server.handle_json_rpc_message(&parsed)
                         })
                     };
 
-                    let resp_opt: Option<Value> = tokio::select! {
-                        biased;
-                        // Cancellation wins ties so a fast-arriving cancel
-                        // for a fast-completing tool is still honoured.
-                        _ = token.cancelled() => {
-                            tracing::debug!(
-                                request_id = %id,
-                                "tools/call cancelled before completion — response dropped"
-                            );
-                            None
-                        }
-                        result = work => match result {
+                    // Always await the real worker: cancelled CPU work must
+                    // release its semaphore permit before another worker starts.
+                    let resp_opt: Option<Value> = match work.await {
                             Ok(Ok(opt)) => opt,
                             Ok(Err(e)) => {
                                 tracing::warn!(
@@ -526,9 +550,9 @@ impl SophonServer {
                                     "internal error: tool task panicked".to_string(),
                                 ))
                             }
-                        }
-                    };
-
+                        };
+                    // Drop the result after a cancel, even if it raced the worker.
+                    let resp_opt = if token.is_cancelled() { None } else { resp_opt };
                     pending_for_task.lock().await.remove(&id_key);
 
                     if let Some(response) = resp_opt {
@@ -553,7 +577,8 @@ impl SophonServer {
                 let target_key = canonical_id_key(&target_id);
                 let cancelled = {
                     let mut map = pending.lock().await;
-                    if let Some(token) = map.remove(&target_key) {
+                    if let Some((token, stop)) = map.remove(&target_key) {
+                        stop.store(true, Ordering::Release);
                         token.cancel();
                         true
                     } else {
@@ -570,8 +595,7 @@ impl SophonServer {
 
             // Default inline dispatch.
             let response_opt = {
-                let mut srv = server.lock().await;
-                srv.handle_json_rpc_message(&parsed)?
+                server.handle_json_rpc_message(&parsed)?
             };
             if let Some(response) = response_opt {
                 write_response(&out, &response).await?;
