@@ -9,6 +9,11 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel superseded PR runs so obsolete, expensive builds do not pile up.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
